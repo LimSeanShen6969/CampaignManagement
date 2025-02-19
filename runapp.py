@@ -1,3 +1,7 @@
+pip install shap
+pip install --upgrade numpy pandas scikit-learn scipy matplotlib streamlit
+
+
 
 import shap
 import numpy as np
