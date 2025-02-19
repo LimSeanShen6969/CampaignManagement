@@ -11,44 +11,49 @@ from scipy.optimize import linprog
 st.title("Campaign Reach Optimization & SHAP Analysis")
 
 # User Inputs for Campaign Parameters
-NUM_CAMPAIGNS = st.number_input("Number of Campaigns", min_value=1, max_value=10, value=5)
-TOTAL_CUSTOMERS = st.number_input("Total Customers", min_value=1000, max_value=500000, value=250000)
-BUDGET_CONSTRAINTS = st.number_input("Total Budget ($)", min_value=10000, max_value=500000, value=100000)
+st.sidebar.header("Campaign Settings")
+NUM_CAMPAIGNS = st.sidebar.slider("Number of Campaigns", min_value=3, max_value=10, value=5)
+TOTAL_CUSTOMERS = st.sidebar.number_input("Total Customers", min_value=50000, max_value=500000, value=250000, step=5000)
+BUDGET_CONSTRAINTS = st.sidebar.number_input("Total Budget ($)", min_value=50000, max_value=500000, value=100000, step=5000)
 
 # User Adjustable Campaign Data
+st.sidebar.header("Campaign Parameters")
 MAX_CUSTOMERS_PER_CAMPAIGN = []
 EXPECTED_REACH_RATE = []
 COST_PER_CUSTOMER = []
 
 for i in range(NUM_CAMPAIGNS):
-    MAX_CUSTOMERS_PER_CAMPAIGN.append(st.number_input(f"Max Customers for Campaign {i+1}", min_value=1000, max_value=TOTAL_CUSTOMERS, value=50000))
-    EXPECTED_REACH_RATE.append(st.slider(f"Expected Reach Rate for Campaign {i+1}", min_value=0.1, max_value=1.0, value=0.8))
-    COST_PER_CUSTOMER.append(st.number_input(f"Cost Per Customer for Campaign {i+1} ($)", min_value=0.5, max_value=5.0, value=2.0))
+    with st.sidebar.expander(f"Campaign {i+1} Settings"):
+        MAX_CUSTOMERS_PER_CAMPAIGN.append(st.number_input(f"Max Customers", min_value=25000, max_value=50000, value=np.random.randint(25000, 50000)))
+        EXPECTED_REACH_RATE.append(st.slider(f"Expected Reach Rate", min_value=0.1, max_value=1.0, value=np.round(np.random.uniform(0.6, 0.9), 2)))
+        COST_PER_CUSTOMER.append(st.number_input(f"Cost Per Customer ($)", min_value=1.0, max_value=5.0, value=np.round(np.random.uniform(1.5, 3.0), 2)))
 
 # File Upload
 uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 else:
-    np.random.seed(42)
+    np.random.seed(None)  # Ensure randomness each run
+    historical_reach = np.random.randint(25000, 50000, NUM_CAMPAIGNS)
+    ad_spend = np.random.randint(20000, 50000, NUM_CAMPAIGNS)
     data = {
         "Campaign": [f"Campaign {i+1}" for i in range(NUM_CAMPAIGNS)],
-        "Historical Reach": np.random.randint(30000, 60000, NUM_CAMPAIGNS),
-        "Ad Spend": np.random.randint(20000, 50000, NUM_CAMPAIGNS),
-        "Engagement Rate": np.random.rand(NUM_CAMPAIGNS),
+        "Historical Reach": historical_reach,
+        "Ad Spend": ad_spend,
+        "Engagement Rate": np.round(np.random.uniform(0.2, 0.8, NUM_CAMPAIGNS), 2),
         "Competitor Ad Spend": np.random.randint(15000, 45000, NUM_CAMPAIGNS),
         "Seasonality Factor": np.random.choice([0.9, 1.0, 1.1], NUM_CAMPAIGNS),
-        "Repeat Customer Rate": np.random.rand(NUM_CAMPAIGNS),
+        "Repeat Customer Rate": np.round(np.random.uniform(0.1, 0.6, NUM_CAMPAIGNS), 2),
     }
     df = pd.DataFrame(data)
 
 # Feature Engineering
-X = df[["Historical Reach", "Ad Spend", "Engagement Rate", "Competitor Ad Spend", "Seasonality Factor", "Repeat Customer Rate"]]
-y = np.random.rand(len(df)) * 100  # Simulated reach rate as percentage
+X = df.drop(columns=["Campaign"])
+y = np.random.rand(len(df)) * 100
 
 # Train Model
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-model = RandomForestRegressor(n_estimators=100, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=None)
+model = RandomForestRegressor(n_estimators=100, random_state=None)
 model.fit(X_train, y_train)
 df["Predicted Reach Rate"] = model.predict(X) / 100
 
