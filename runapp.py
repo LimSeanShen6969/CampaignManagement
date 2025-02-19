@@ -1,4 +1,3 @@
-
 import shap
 import numpy as np
 import pandas as pd
@@ -11,20 +10,26 @@ from scipy.optimize import linprog
 # Streamlit App Title
 st.title("Campaign Reach Optimization & SHAP Analysis")
 
+# User Inputs for Campaign Parameters
+NUM_CAMPAIGNS = st.number_input("Number of Campaigns", min_value=1, max_value=10, value=5)
+TOTAL_CUSTOMERS = st.number_input("Total Customers", min_value=1000, max_value=500000, value=250000)
+BUDGET_CONSTRAINTS = st.number_input("Total Budget ($)", min_value=10000, max_value=500000, value=100000)
+
+# User Adjustable Campaign Data
+MAX_CUSTOMERS_PER_CAMPAIGN = []
+EXPECTED_REACH_RATE = []
+COST_PER_CUSTOMER = []
+
+for i in range(NUM_CAMPAIGNS):
+    MAX_CUSTOMERS_PER_CAMPAIGN.append(st.number_input(f"Max Customers for Campaign {i+1}", min_value=1000, max_value=TOTAL_CUSTOMERS, value=50000))
+    EXPECTED_REACH_RATE.append(st.slider(f"Expected Reach Rate for Campaign {i+1}", min_value=0.1, max_value=1.0, value=0.8))
+    COST_PER_CUSTOMER.append(st.number_input(f"Cost Per Customer for Campaign {i+1} ($)", min_value=0.5, max_value=5.0, value=2.0))
+
 # File Upload
 uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
-
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 else:
-    # Default synthetic data if no file is uploaded
-    NUM_CAMPAIGNS = 5
-    TOTAL_CUSTOMERS = 250000
-    MAX_CUSTOMERS_PER_CAMPAIGN = [50000, 60000, 55000, 45000, 40000]
-    EXPECTED_REACH_RATE = [0.8, 0.7, 0.6, 0.75, 0.85]
-    BUDGET_CONSTRAINTS = 100000
-    COST_PER_CUSTOMER = [2, 1.8, 2.2, 1.5, 1.7]
-
     np.random.seed(42)
     data = {
         "Campaign": [f"Campaign {i+1}" for i in range(NUM_CAMPAIGNS)],
@@ -56,13 +61,6 @@ st.subheader("Feature Importance (SHAP Analysis)")
 fig, ax = plt.subplots()
 shap.summary_plot(shap_values, X, show=False)
 st.pyplot(fig)
-
-# Feature importance ranking
-shap_importance = pd.DataFrame({
-    'Feature': X.columns,
-    'Mean SHAP Value': np.abs(shap_values.values).mean(axis=0)
-}).sort_values(by='Mean SHAP Value', ascending=False)
-st.write("Feature Importance Ranking:", shap_importance)
 
 # Optimization Setup
 c = -df["Predicted Reach Rate"].values
@@ -105,4 +103,3 @@ plt.ylabel('Reach Rate')
 plt.xticks(index + bar_width / 2, df['Campaign'])
 plt.legend()
 st.pyplot(fig)
-
