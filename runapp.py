@@ -76,8 +76,9 @@ model.fit(X_train, y_train)
 df["Predicted Reach Rate"] = model.predict(X) / 100
 
 # SHAP Analysis
-explainer = shap.Explainer(model, X)
-shap_values = explainer(X)
+explainer = shap.Explainer(model, X)  # No check_additivity here
+shap_values = explainer(X, check_additivity=False)  # Apply when calling the explainer
+
 
 # Display SHAP Summary Plot
 st.subheader("Feature Importance (SHAP Analysis)")
