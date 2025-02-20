@@ -24,9 +24,27 @@ COST_PER_CUSTOMER = []
 
 for i in range(NUM_CAMPAIGNS):
     with st.sidebar.expander(f"Campaign {i+1} Settings"):
-        MAX_CUSTOMERS_PER_CAMPAIGN.append(st.number_input(f"Max Customers", min_value=25000, max_value=50000, value=np.random.randint(25000, 50000)))
-        EXPECTED_REACH_RATE.append(st.slider(f"Expected Reach Rate", min_value=0.1, max_value=1.0, value=np.round(np.random.uniform(0.6, 0.9), 2)))
-        COST_PER_CUSTOMER.append(st.number_input(f"Cost Per Customer ($)", min_value=1.0, max_value=5.0, value=np.round(np.random.uniform(1.5, 3.0), 2)))
+        MAX_CUSTOMERS_PER_CAMPAIGN.append(st.number_input(
+            f"Max Customers for Campaign {i+1}", 
+            min_value=25000, max_value=50000, 
+            value=np.random.randint(25000, 50000), 
+            key=f"max_customers_{i}"
+        ))
+        
+        EXPECTED_REACH_RATE.append(st.slider(
+            f"Expected Reach Rate for Campaign {i+1}", 
+            min_value=0.1, max_value=1.0, 
+            value=np.round(np.random.uniform(0.6, 0.9), 2), 
+            key=f"reach_rate_{i}"
+        ))
+        
+        COST_PER_CUSTOMER.append(st.number_input(
+            f"Cost Per Customer ($) for Campaign {i+1}", 
+            min_value=1.0, max_value=5.0, 
+            value=np.round(np.random.uniform(1.5, 3.0), 2), 
+            key=f"cost_per_customer_{i}"
+        ))
+
 
 # File Upload
 uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
