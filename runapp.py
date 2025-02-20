@@ -67,12 +67,23 @@ fig, ax = plt.subplots()
 shap.summary_plot(shap_values, X, show=False)
 st.pyplot(fig)
 
-# Optimization Setup
-c = -df["Predicted Reach Rate"].values
-A_ub = np.vstack([np.eye(len(df)), COST_PER_CUSTOMER[:len(df)]])
-b_ub = np.append(np.array(MAX_CUSTOMERS_PER_CAMPAIGN[:len(df)]), BUDGET_CONSTRAINTS)
-result = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(0, TOTAL_CUSTOMERS)] * len(df), method='highs')
-allocated_customers = result.x.astype(int)
+# Ensure each campaign gets at least 25,000 customers first
+base_allocation = np.minimum(MAX_CUSTOMERS_PER_CAMPAIGN, 25000)
+remaining_customers = TOTAL_CUSTOMERS - base_allocation.sum()
+
+# Calculate available slots per campaign
+available_capacity = np.array(MAX_CUSTOMERS_PER_CAMPAIGN) - base_allocation
+
+# Distribute the remaining customers proportionally based on available capacity
+if remaining_customers > 0:
+    proportions = available_capacity / available_capacity.sum()
+    additional_allocation = np.floor(proportions * remaining_customers).astype(int)
+    additional_allocation[np.argmax(available_capacity)] += remaining_customers - additional_allocation.sum()
+else:
+    additional_allocation = np.zeros(NUM_CAMPAIGNS, dtype=int)
+
+# Final allocation
+allocated_customers = base_allocation + additional_allocation
 
 # Simulation Results
 allocation_df = pd.DataFrame({
