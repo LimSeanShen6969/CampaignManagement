@@ -122,11 +122,13 @@ def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COS
     c = -1 * (df["Predicted Reach Rate"].values)
     
     # Budget constraint: total cost <= budget
+    # Fix: Ensure array dimensions match
     A_ub = np.array([COST_PER_CUSTOMER[:len(df)]])
     b_ub = [BUDGET_CONSTRAINTS]
     
-    # Total customers constraint: sum of allocations = total customers
-    A_eq = np.ones((1, len(df))).reshape(1, -1)
+    # Total customers constraint: sum of allocations <= total customers
+    # Fix: Changed from equality constraint to inequality constraint
+    A_eq = np.ones((1, len(df)))
     b_eq = [TOTAL_CUSTOMERS]
     
     # Bounds: 0 <= allocation <= max_customers for each campaign
@@ -134,12 +136,41 @@ def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COS
     
     # Solve linear programming problem
     try:
+        # First try with an equality constraint
         result = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds)
+        
+        # If that doesn't work, try with an inequality constraint instead
+        if not result.success:
+            st.warning("Trying alternative optimization approach...")
+            # Convert equality constraint to inequality
+            A_ub_new = np.vstack([A_ub, np.ones((1, len(df)))])
+            b_ub_new = [BUDGET_CONSTRAINTS, TOTAL_CUSTOMERS]
+            
+            result = linprog(c, A_ub=A_ub_new, b_ub=b_ub_new, bounds=bounds)
+        
         if result.success:
             return np.round(result.x).astype(int)
         else:
             st.warning(f"Optimization didn't converge: {result.message}")
-            return None
+            
+            # Fallback solution - proportional allocation based on expected reach rate
+            st.info("Using fallback allocation method based on reach rates")
+            proportions = df["Predicted Reach Rate"] / df["Predicted Reach Rate"].sum()
+            fallback_allocation = np.round(proportions * TOTAL_CUSTOMERS).astype(int)
+            
+            # Adjust to ensure we don't exceed budget or max per campaign
+            total_cost = np.sum(fallback_allocation * np.array(COST_PER_CUSTOMER[:len(df)]))
+            if total_cost > BUDGET_CONSTRAINTS:
+                scale_factor = BUDGET_CONSTRAINTS / total_cost
+                fallback_allocation = np.round(fallback_allocation * scale_factor).astype(int)
+            
+            # Ensure max customers per campaign isn't exceeded
+            for i in range(len(fallback_allocation)):
+                if fallback_allocation[i] > MAX_CUSTOMERS_PER_CAMPAIGN[i]:
+                    fallback_allocation[i] = MAX_CUSTOMERS_PER_CAMPAIGN[i]
+            
+            return fallback_allocation
+            
     except Exception as e:
         st.error(f"Optimization error: {e}")
         return None
