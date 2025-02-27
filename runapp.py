@@ -14,6 +14,11 @@ from sklearn.metrics import r2_score, mean_absolute_error
 from scipy.optimize import linprog
 from scipy import stats
 from statsmodels.stats.power import TTestIndPower
+from pydantic import BaseModel, SkipValidation
+from typing import Any
+
+class MyModel(BaseModel):
+    field: SkipValidation[Any
 
 # Page configuration
 st.set_page_config(
