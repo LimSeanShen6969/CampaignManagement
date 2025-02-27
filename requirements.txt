@@ -8,4 +8,3 @@ google-genai==0.8.0
 scikit-learn==1.4.0
 scipy==1.13.1
 statsmodels==0.14.1
-pydantic==2.0.0
