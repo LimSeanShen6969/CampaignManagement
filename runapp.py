@@ -18,7 +18,7 @@ from pydantic import BaseModel, SkipValidation
 from typing import Any
 
 class MyModel(BaseModel):
-    field: SkipValidation[Any
+    field: SkipValidation[Any]
 
 # Page configuration
 st.set_page_config(
