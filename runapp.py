@@ -264,10 +264,10 @@ def main():
         # [Rest of the existing optimization logic]
     
     elif page == "AI Insights 🤖":
-        st.header("Strategic Campaign Intelligence")
+        st.header("Strategic Campaign Intelligence with Agentic AI")
         
         # AI-powered insights with more context
-        st.subheader("Get AI-Generated Strategic Recommendations")
+        st.subheader("Let AI recommend you some ideas about next strategies")
         user_query = st.text_area(
             "Ask about your campaign strategy:",
             "What are the key factors affecting campaign reach and how can I improve my marketing efficiency?"
