@@ -7,15 +7,18 @@ import sqlite3
 import re
 import time
 from datetime import datetime
+import plotly.express as px
+import plotly.graph_objs as go
 from google import genai
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error
+from sklearn.preprocessing import StandardScaler
 from scipy.optimize import linprog
 from scipy import stats
 from statsmodels.stats.power import TTestIndPower
 
-# Enhanced Page configuration
+# Page configuration
 st.set_page_config(
     page_title="Campaign Optimization AI",
     page_icon="📊",
@@ -23,7 +26,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Improved custom CSS for better UI
+# Enhanced custom CSS
 st.markdown("""
 <style>
     .main .block-container {
@@ -68,7 +71,7 @@ def initialize_api():
 
 client = initialize_api()
 
-# Enhanced Database functions
+# Database functions
 def init_db():
     """Initialize SQLite database for storing campaign data"""
     conn = sqlite3.connect('campaign_data.db')
@@ -107,7 +110,7 @@ def init_db():
     conn.commit()
     return conn
 
-# Helper functions with new features
+# Enhanced sample data generation
 @st.cache_data(ttl=3600)
 def load_sample_data(num_campaigns=5):
     """Load sample data for demonstration with added complexity"""
@@ -130,39 +133,198 @@ def load_sample_data(num_campaigns=5):
         df['Engagement Rate'].std() / df['Engagement Rate'].mean() * 100
     )
     
+    # Calculate additional metrics
+    df['Efficiency Score'] = (df['Historical Reach'] / df['Ad Spend']) * df['Engagement Rate']
+    df['Potential Growth'] = df['Repeat Customer Rate'] * df['Seasonality Factor']
+    
     return df
 
-def train_model(X, y):
-    """Train and evaluate a random forest model with prediction intervals"""
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+# Advanced Visualization Functions
+def create_advanced_dashboard(df):
+    """Create an advanced, interactive dashboard with multiple visualizations"""
+    st.header("Comprehensive Campaign Performance Dashboard")
     
-    # Evaluate model
-    train_score = model.score(X_train, y_train)
-    test_score = model.score(X_test, y_test)
+    # Tabs for different visualization types
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Multi-Dimensional Analysis", 
+        "Correlation Insights", 
+        "Performance Radar", 
+        "Detailed Campaign Metrics"
+    ])
     
-    y_pred = model.predict(X_test)
-    mae = mean_absolute_error(y_test, y_pred)
+    with tab1:
+        # Multi-dimensional scatter plot with interactive features
+        st.subheader("Campaign Performance Landscape")
+        
+        scatter_fig = px.scatter(
+            df, 
+            x="Historical Reach", 
+            y="Engagement Rate",
+            size="Ad Spend",
+            color="Campaign Risk",
+            hover_name="Campaign",
+            title="Campaign Performance Multidimensional View",
+            labels={
+                "Historical Reach": "Historical Reach",
+                "Engagement Rate": "Engagement Rate",
+                "Ad Spend": "Ad Spend Size",
+                "Campaign Risk": "Campaign Risk"
+            },
+            size_max=60
+        )
+        scatter_fig.update_layout(height=600)
+        st.plotly_chart(scatter_fig, use_container_width=True)
     
-    # Calculate prediction confidence interval
-    std_dev = np.std(y_test - y_pred)
-    confidence_interval = 1.96 * std_dev
+    with tab2:
+        # Correlation Heatmap
+        st.subheader("Campaign Metrics Correlation")
+        
+        corr_columns = [
+            'Historical Reach', 
+            'Ad Spend', 
+            'Engagement Rate', 
+            'Competitor Ad Spend', 
+            'Seasonality Factor', 
+            'Repeat Customer Rate',
+            'Campaign Risk'
+        ]
+        
+        corr_matrix = df[corr_columns].corr()
+        
+        plt.figure(figsize=(10, 8))
+        correlation_fig = sns.heatmap(
+            corr_matrix, 
+            annot=True, 
+            cmap='coolwarm', 
+            linewidths=0.5, 
+            fmt=".2f",
+            square=True,
+            center=0
+        )
+        plt.title("Correlation Between Campaign Metrics")
+        st.pyplot(plt.gcf())
     
-    return model, train_score, test_score, mae, confidence_interval
+    with tab3:
+        # Radar Chart for Campaign Comparison
+        st.subheader("Campaign Performance Radar")
+        
+        scaler = StandardScaler()
+        radar_columns = [
+            'Historical Reach', 
+            'Engagement Rate', 
+            'Ad Spend', 
+            'Repeat Customer Rate'
+        ]
+        
+        radar_data = scaler.fit_transform(df[radar_columns])
+        
+        radar_fig = go.Figure()
+        
+        for i, campaign in enumerate(df['Campaign']):
+            radar_fig.add_trace(go.Scatterpolar(
+                r=radar_data[i],
+                theta=radar_columns,
+                fill='toself',
+                name=campaign
+            ))
+        
+        radar_fig.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[-2, 2]
+                )
+            ),
+            showlegend=True,
+            title="Normalized Campaign Performance Comparison"
+        )
+        
+        st.plotly_chart(radar_fig, use_container_width=True)
+    
+    with tab4:
+        # Detailed Campaign Metrics with Interactive Table
+        st.subheader("Comprehensive Campaign Metrics")
+        
+        styled_df = df.style.highlight_max(
+            subset=['Efficiency Score', 'Potential Growth'], 
+            color='lightgreen'
+        ).format({
+            'Efficiency Score': "{:.4f}",
+            'Potential Growth': "{:.4f}",
+            'Campaign Risk': "{:.2f}%"
+        })
+        
+        st.dataframe(styled_df)
 
-def add_prediction_confidence(model, X, y):
-    """Calculate prediction confidence intervals"""
-    predictions = model.predict(X)
-    std_dev = np.std(y - predictions)
-    confidence_interval = 1.96 * std_dev
+# Enhanced Optimization Function
+def optimize_campaign_with_agentic_ai(df, budget, total_customers):
+    """Enhanced campaign optimization with Agentic AI insights"""
+    st.header("Advanced Campaign Optimization")
     
-    return {
-        'predictions': predictions,
-        'lower_bound': predictions - confidence_interval,
-        'upper_bound': predictions + confidence_interval
-    }
+    st.subheader("AI Optimization Strategy")
+    
+    # Calculate optimization metrics
+    df['Optimization Potential'] = (
+        df['Historical Reach'] / df['Ad Spend'] * 
+        df['Engagement Rate'] * 
+        df['Seasonality Factor']
+    )
+    
+    # Sort campaigns by optimization potential
+    optimized_campaigns = df.sort_values('Optimization Potential', ascending=False)
+    
+    # Simulate budget allocation
+    total_optimization_potential = optimized_campaigns['Optimization Potential'].sum()
+    optimized_campaigns['Allocated Budget'] = (
+        optimized_campaigns['Optimization Potential'] / total_optimization_potential * budget
+    )
+    
+    # Estimated reach calculation
+    optimized_campaigns['Estimated Reach'] = (
+        optimized_campaigns['Allocated Budget'] / 
+        optimized_campaigns['Ad Spend'] * 
+        optimized_campaigns['Historical Reach']
+    )
+    
+    # Visualization of optimization results
+    fig = px.bar(
+        optimized_campaigns, 
+        x='Campaign', 
+        y='Allocated Budget', 
+        color='Estimated Reach',
+        title='AI-Optimized Budget Allocation',
+        labels={'Allocated Budget': 'Budget Allocation', 'Estimated Reach': 'Potential Reach'}
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Detailed optimization results
+    st.subheader("Optimization Breakdown")
+    optimization_results = optimized_campaigns[[
+        'Campaign', 
+        'Allocated Budget', 
+        'Estimated Reach', 
+        'Optimization Potential'
+    ]].style.format({
+        'Allocated Budget': "${:,.2f}",
+        'Estimated Reach': "{:,.0f}",
+        'Optimization Potential': "{:.4f}"
+    })
+    
+    st.dataframe(optimization_results)
+    
+    # AI Insights
+    st.subheader("AI Strategic Recommendations")
+    recommendations = [
+        f"🎯 Prioritize {optimized_campaigns.iloc[0]['Campaign']} with highest optimization potential",
+        f"💡 Potential budget reallocation could increase overall reach by {optimized_campaigns['Estimated Reach'].sum() / df['Historical Reach'].sum():.2%}",
+        "🔍 Consider adjusting strategies for lower-performing campaigns",
+        f"📊 Top 2 campaigns ({', '.join(optimized_campaigns.head(2)['Campaign'])}) show most promise"
+    ]
+    
+    for rec in recommendations:
+        st.markdown(rec)
 
+# Export and additional utility functions
 def export_data(df, filename, export_type='csv'):
     """Export campaign data to CSV or Excel"""
     if export_type == 'csv':
@@ -172,39 +334,19 @@ def export_data(df, filename, export_type='csv'):
         df.to_excel(f"{filename}.xlsx", index=False)
         st.success(f"Data exported to {filename}.xlsx")
 
-def save_optimization_run(conn, df, run_name):
-    """Save optimization run to database"""
-    cursor = conn.cursor()
-    for _, row in df.iterrows():
-        cursor.execute("""
-            INSERT INTO optimizations 
-            (date, campaign_id, allocated_customers, 
-            predicted_reach_rate, estimated_reached_customers, total_cost) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            datetime.now().strftime("%Y-%m-%d"),
-            row['Campaign'],
-            row.get('Allocated Customers', 0),
-            row.get('Predicted Reach Rate', 0),
-            row.get('Estimated Reach', 0),
-            row.get('Total Cost', 0)
-        ))
-    conn.commit()
-    st.success(f"Optimization run '{run_name}' saved successfully!")
-
-# Existing optimization function remains the same
+# Existing optimization function
 def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COST_PER_CUSTOMER, BUDGET_CONSTRAINTS, TOTAL_CUSTOMERS):
-    # ... [previous implementation remains unchanged]
+    # [Previous implementation remains unchanged]
     pass
 
-# Main application logic with enhanced features
+# Main application logic
 def main():
     st.title("Campaign Optimization AI 🚀")
     
     # Initialize database
     conn = init_db()
     
-    # Sidebar for navigation with more descriptive labels
+    # Sidebar for navigation
     page = st.sidebar.selectbox(
         "Select Analysis Mode",
         [
@@ -219,11 +361,8 @@ def main():
     df = load_sample_data()
     
     if page == "Campaign Dashboard 📊":
-        st.header("Campaign Performance Overview")
-        
-        # Display campaign data with enhanced formatting
-        st.subheader("Detailed Campaign Metrics")
-        st.dataframe(df.style.highlight_max(axis=0))
+        # Advanced dashboard visualization
+        create_advanced_dashboard(df)
         
         # Export functionality
         col1, col2 = st.columns(2)
@@ -233,41 +372,28 @@ def main():
         with col2:
             if st.button("Export to Excel"):
                 export_data(df, "campaign_data", 'excel')
-        
-        # Enhanced visualizations
-        st.subheader("Campaign Performance Insights")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.barplot(x="Campaign", y="Historical Reach", data=df, ax=ax, palette="viridis")
-            ax.set_title("Historical Reach Comparison")
-            st.pyplot(fig)
-        
-        with col2:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.barplot(x="Campaign", y="Campaign Risk", data=df, ax=ax, palette="rocket")
-            ax.set_title("Campaign Risk Assessment")
-            st.pyplot(fig)
     
     elif page == "Optimization Engine 🎯":
-        # ... [rest of the optimization page remains similar to original]
-        # Consider adding more tooltips and explanatory text
-        st.header("Campaign Resource Allocation")
+        # Budget and customers input
+        budget = st.sidebar.slider(
+            "Total Marketing Budget", 
+            min_value=50000, 
+            max_value=500000, 
+            value=200000
+        )
+        total_customers = st.sidebar.slider(
+            "Total Target Customers", 
+            min_value=10000, 
+            max_value=200000, 
+            value=100000
+        )
         
-        # Add tooltips and more context
-        st.info("""
-        🔍 Use this tool to optimize customer allocation across campaigns.
-        Adjust budget and target customers to find the most efficient strategy.
-        """)
-        
-        # [Rest of the existing optimization logic]
+        if st.sidebar.button("Run AI-Powered Optimization"):
+            optimize_campaign_with_agentic_ai(df, budget, total_customers)
     
     elif page == "AI Insights 🤖":
-        st.header("Strategic Campaign Intelligence with Agentic AI")
+        st.header("Strategic Campaign Intelligence")
         
-        # AI-powered insights with more context
-        st.subheader("Let AI recommend you some ideas about next strategies")
         user_query = st.text_area(
             "Ask about your campaign strategy:",
             "What are the key factors affecting campaign reach and how can I improve my marketing efficiency?"
@@ -310,8 +436,15 @@ def main():
         Experiment with budget and targeting strategies.
         """)
         
-        # Placeholder for future scenario comparison features
-        st.write("Scenario comparison feature coming soon!")
+        # Placeholder for scenario comparison features
+        scenario_type = st.selectbox(
+            "Select Scenario Type",
+            ["Budget Variation", "Target Audience Change", "Seasonal Impact"]
+        )
+        
+        st.write(f"Scenario Comparison for: {scenario_type}")
+        # Future implementation of detailed scenario analysis
 
 if __name__ == "__main__":
     main()
+</antArtifact
