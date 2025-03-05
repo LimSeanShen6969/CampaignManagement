@@ -392,11 +392,11 @@ def main():
             optimize_campaign_with_agentic_ai(df, budget, total_customers)
     
     elif page == "AI Insights 🤖":
-        st.header("Strategic Campaign Intelligence")
+        st.header("Campaign Strategies Recommendation Powered By Gemini")
         
         user_query = st.text_area(
-            "Ask about your campaign strategy:",
-            "What are the key factors affecting campaign reach and how can I improve my marketing efficiency?"
+            "Ask about your campaign strategy with AI:",
+            "Example: What are the key factors affecting campaign reach and how can I improve my marketing efficiency?"
         )
         
         if st.button("Generate Strategic Insights"):
