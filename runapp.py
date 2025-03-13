@@ -650,7 +650,6 @@ def display_scenario_comparison(original_df, scenario_df, scenario_type, paramet
     else:
         st.warning("This scenario does not improve overall efficiency compared to the current approach")
 
-
 def main():
     st.title("Campaign Optimization AI 🚀")
     
@@ -710,7 +709,7 @@ def main():
                 df = load_sample_data()
                 st.sidebar.warning("Using sample data. Please upload your dataset to see your own campaign metrics.")
     
-    # Rest of your existing code...
+    # Page-specific content
     if page == "Campaign Dashboard 📊":
         # Advanced dashboard visualization
         create_advanced_dashboard(df)
@@ -779,87 +778,85 @@ def main():
                     st.write("- Consider reallocating budget from low-performing campaigns")
             else:
                 st.error("AI integration currently unavailable")
-
-        elif page == "Scenario Comparison 📈":
-            st.header("Campaign Scenario Simulator")
-            st.info("""
-    🔬 Compare different marketing allocation scenarios.
-    Experiment with budget and targeting strategies to visualize potential outcomes.
-    """)
     
-    # Scenario selection
-    scenario_type = st.selectbox(
-        "Select Scenario Type",
-        ["Budget Variation", "Target Audience Change", "Seasonal Impact"]
-    )
-    
-    # Dynamic scenario parameters based on selection
-    parameters = {}
-    
-    if scenario_type == "Budget Variation":
-        col1, col2 = st.columns(2)
+    elif page == "Scenario Comparison 📈":
+        st.header("Campaign Scenario Simulator")
+        st.info("""
+        🔬 Compare different marketing allocation scenarios.
+        Experiment with budget and targeting strategies to visualize potential outcomes.
+        """)
         
-        with col1:
-            budget_factor = st.slider(
-                "Budget Adjustment Factor", 
-                min_value=0.5, 
-                max_value=2.0, 
-                value=1.0, 
-                step=0.1,
-                help="Multiply current budget by this factor (e.g., 1.5 = 50% increase)"
-            )
-            parameters['budget_factor'] = budget_factor
-            
-        with col2:
-            elasticity = st.slider(
-                "Spend-Reach Elasticity", 
-                min_value=0.1, 
-                max_value=1.0, 
-                value=0.7,
-                step=0.1,
-                help="How responsive reach is to spend changes (higher = more responsive)"
-            )
-            parameters['elasticity'] = elasticity
-            
-    elif scenario_type == "Target Audience Change":
-        audience_focus = st.radio(
-            "Audience Targeting Strategy",
-            ["Broad", "Balanced", "Narrow"],
-            horizontal=True,
-            help="Broad = larger audience, lower engagement; Narrow = smaller audience, higher engagement"
+        # Scenario selection
+        scenario_type = st.selectbox(
+            "Select Scenario Type",
+            ["Budget Variation", "Target Audience Change", "Seasonal Impact"]
         )
-        parameters['audience_focus'] = audience_focus
         
-    elif scenario_type == "Seasonal Impact":
-        season = st.radio(
-            "Seasonal Period",
-            ["Peak", "Normal", "Low"],
-            horizontal=True,
-            help="How seasonal factors affect campaign performance"
-        )
-        parameters['season'] = season
-    
-    # Run comparison button
-    if st.button("Run Scenario Comparison"):
-        with st.spinner("Simulating scenario..."):
-            # Add slight delay for visual effect
-            time.sleep(0.5)
+        # Dynamic scenario parameters based on selection
+        parameters = {}
+        
+        if scenario_type == "Budget Variation":
+            col1, col2 = st.columns(2)
             
-            # Run the scenario simulation
-            scenario_df = simulate_scenario(df, scenario_type, parameters)
-            
-            # Display comparison
-            display_scenario_comparison(df, scenario_df, scenario_type, parameters)
-            
-            # Export option
-            st.download_button(
-                label="Export Scenario Results",
-                data=scenario_df.to_csv().encode('utf-8'),
-                file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
-                mime='text/csv',
+            with col1:
+                budget_factor = st.slider(
+                    "Budget Adjustment Factor", 
+                    min_value=0.5, 
+                    max_value=2.0, 
+                    value=1.0, 
+                    step=0.1,
+                    help="Multiply current budget by this factor (e.g., 1.5 = 50% increase)"
+                )
+                parameters['budget_factor'] = budget_factor
+                
+            with col2:
+                elasticity = st.slider(
+                    "Spend-Reach Elasticity", 
+                    min_value=0.1, 
+                    max_value=1.0, 
+                    value=0.7,
+                    step=0.1,
+                    help="How responsive reach is to spend changes (higher = more responsive)"
+                )
+                parameters['elasticity'] = elasticity
+                
+        elif scenario_type == "Target Audience Change":
+            audience_focus = st.radio(
+                "Audience Targeting Strategy",
+                ["Broad", "Balanced", "Narrow"],
+                horizontal=True,
+                help="Broad = larger audience, lower engagement; Narrow = smaller audience, higher engagement"
             )
+            parameters['audience_focus'] = audience_focus
             
-
+        elif scenario_type == "Seasonal Impact":
+            season = st.radio(
+                "Seasonal Period",
+                ["Peak", "Normal", "Low"],
+                horizontal=True,
+                help="How seasonal factors affect campaign performance"
+            )
+            parameters['season'] = season
+        
+        # Run comparison button
+        if st.button("Run Scenario Comparison"):
+            with st.spinner("Simulating scenario..."):
+                # Add slight delay for visual effect
+                time.sleep(0.5)
+                
+                # Run the scenario simulation
+                scenario_df = simulate_scenario(df, scenario_type, parameters)
+                
+                # Display comparison
+                display_scenario_comparison(df, scenario_df, scenario_type, parameters)
+                
+                # Export option
+                st.download_button(
+                    label="Export Scenario Results",
+                    data=scenario_df.to_csv().encode('utf-8'),
+                    file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
+                    mime='text/csv',
+                )
 
 
 if __name__ == "__main__":
