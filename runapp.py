@@ -779,9 +779,10 @@ def main():
                     st.write("- Consider reallocating budget from low-performing campaigns")
             else:
                 st.error("AI integration currently unavailable")
-   elif page == "Scenario Comparison 📈":
-    st.header("Campaign Scenario Simulator")
-    st.info("""
+
+        elif page == "Scenario Comparison 📈":
+            st.header("Campaign Scenario Simulator")
+            st.info("""
     🔬 Compare different marketing allocation scenarios.
     Experiment with budget and targeting strategies to visualize potential outcomes.
     """)
@@ -857,6 +858,7 @@ def main():
                 file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
                 mime='text/csv',
             )
+            
 
 
 
