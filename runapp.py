@@ -110,6 +110,72 @@ def init_db():
     conn.commit()
     return conn
 
+def upload_dataset():
+    """Allow users to upload their own campaign dataset"""
+    st.subheader("Upload Your Campaign Data")
+    
+    uploaded_file = st.file_uploader(
+        "Upload CSV or Excel file", 
+        type=["csv", "xlsx", "xls"]
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Display a loading message
+            with st.spinner("Processing your dataset..."):
+                # Determine file type and read accordingly
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                
+                # Basic validation
+                required_columns = [
+                    "Campaign", "Historical Reach", "Ad Spend", 
+                    "Engagement Rate", "Competitor Ad Spend", 
+                    "Seasonality Factor", "Repeat Customer Rate"
+                ]
+                
+                missing_columns = [col for col in required_columns if col not in df.columns]
+                
+                if missing_columns:
+                    st.error(f"Missing required columns: {', '.join(missing_columns)}")
+                    st.info("Please ensure your dataset has the following columns: " + 
+                           ", ".join(required_columns))
+                    
+                    # Show sample data format
+                    st.subheader("Sample Data Format")
+                    st.dataframe(load_sample_data(3))
+                    
+                    return None
+                
+                # Calculate additional metrics if they don't exist
+                if 'Campaign Risk' not in df.columns:
+                    df['Campaign Risk'] = (
+                        df['Engagement Rate'].std() / df['Engagement Rate'].mean() * 100
+                    )
+                
+                if 'Efficiency Score' not in df.columns:
+                    df['Efficiency Score'] = (df['Historical Reach'] / df['Ad Spend']) * df['Engagement Rate']
+                
+                if 'Potential Growth' not in df.columns:
+                    df['Potential Growth'] = df['Repeat Customer Rate'] * df['Seasonality Factor']
+                
+                # Display success message
+                st.success(f"Dataset with {len(df)} campaigns successfully loaded!")
+                
+                # Preview the data
+                st.subheader("Data Preview")
+                st.dataframe(df.head())
+                
+                return df
+        
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+            return None
+    
+    return None
+
 # Enhanced sample data generation
 @st.cache_data(ttl=3600)
 def load_sample_data(num_campaigns=5):
@@ -339,7 +405,6 @@ def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COS
     # [Previous implementation remains unchanged]
     pass
 
-# Main application logic
 def main():
     st.title("Campaign Optimization AI 🚀")
     
@@ -357,9 +422,27 @@ def main():
         ]
     )
     
-    # Load sample data
-    df = load_sample_data()
+    # Data source selection
+    data_source = st.sidebar.radio(
+        "Select Data Source",
+        ["Use Sample Data", "Upload Your Own Data"]
+    )
     
+    # Load appropriate data
+    if data_source == "Use Sample Data":
+        df = load_sample_data()
+        st.sidebar.info("Using sample data for demonstration purposes.")
+    else:
+        # Call the upload function
+        uploaded_df = upload_dataset()
+        if uploaded_df is not None:
+            df = uploaded_df
+        else:
+            # Fall back to sample data if upload fails or isn't completed
+            df = load_sample_data()
+            st.sidebar.warning("Using sample data. Please upload your dataset to see your own campaign metrics.")
+    
+    # Rest of your existing code...
     if page == "Campaign Dashboard 📊":
         # Advanced dashboard visualization
         create_advanced_dashboard(df)
@@ -372,6 +455,8 @@ def main():
         with col2:
             if st.button("Export to Excel"):
                 export_data(df, "campaign_data", 'excel')
+    
+    # ... rest of your existing code
     
     elif page == "Optimization Engine 🎯":
         # Budget and customers input
