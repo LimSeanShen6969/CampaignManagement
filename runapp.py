@@ -111,8 +111,14 @@ def init_db():
     return conn
 
 def upload_dataset():
-    """Allow users to upload their own campaign dataset"""
+    """Allow users to upload their own campaign dataset and store in session state"""
     st.subheader("Upload Your Campaign Data")
+    
+    # Check if data is already in session state
+    if 'user_data' in st.session_state and st.session_state['user_data'] is not None:
+        st.success(f"Using your previously uploaded dataset with {len(st.session_state['user_data'])} campaigns.")
+        st.button("Upload New Dataset", on_click=lambda: st.session_state.pop('user_data', None))
+        return st.session_state['user_data']
     
     uploaded_file = st.file_uploader(
         "Upload CSV or Excel file", 
@@ -160,6 +166,9 @@ def upload_dataset():
                 
                 if 'Potential Growth' not in df.columns:
                     df['Potential Growth'] = df['Repeat Customer Rate'] * df['Seasonality Factor']
+                
+                # Store in session state
+                st.session_state['user_data'] = df
                 
                 # Display success message
                 st.success(f"Dataset with {len(df)} campaigns successfully loaded!")
@@ -408,6 +417,10 @@ def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COS
 def main():
     st.title("Campaign Optimization AI 🚀")
     
+    # Initialize session state for data persistence if not already done
+    if 'data_source' not in st.session_state:
+        st.session_state['data_source'] = "Use Sample Data"
+    
     # Initialize database
     conn = init_db()
     
@@ -422,25 +435,43 @@ def main():
         ]
     )
     
-    # Data source selection
+    # Data source selection with session state
     data_source = st.sidebar.radio(
         "Select Data Source",
-        ["Use Sample Data", "Upload Your Own Data"]
+        ["Use Sample Data", "Upload Your Own Data"],
+        index=0 if st.session_state['data_source'] == "Use Sample Data" else 1,
+        key="data_source_radio"
     )
     
-    # Load appropriate data
+    # Update session state
+    st.session_state['data_source'] = data_source
+    
+    # Load appropriate data based on session state
     if data_source == "Use Sample Data":
+        # Clear any existing user data when switching to sample data
+        if 'user_data' in st.session_state:
+            st.session_state.pop('user_data', None)
         df = load_sample_data()
         st.sidebar.info("Using sample data for demonstration purposes.")
     else:
-        # Call the upload function
-        uploaded_df = upload_dataset()
-        if uploaded_df is not None:
-            df = uploaded_df
+        # Try to load from session state first, then from upload
+        if 'user_data' in st.session_state and st.session_state['user_data'] is not None:
+            df = st.session_state['user_data']
+            st.sidebar.success(f"Using your uploaded dataset with {len(df)} campaigns")
+            
+            # Add option to use a different dataset
+            if st.sidebar.button("Upload Different Dataset"):
+                st.session_state.pop('user_data', None)
+                st.experimental_rerun()
         else:
-            # Fall back to sample data if upload fails or isn't completed
-            df = load_sample_data()
-            st.sidebar.warning("Using sample data. Please upload your dataset to see your own campaign metrics.")
+            # Call the upload function
+            uploaded_df = upload_dataset()
+            if uploaded_df is not None:
+                df = uploaded_df
+            else:
+                # Fall back to sample data if upload fails or isn't completed
+                df = load_sample_data()
+                st.sidebar.warning("Using sample data. Please upload your dataset to see your own campaign metrics.")
     
     # Rest of your existing code...
     if page == "Campaign Dashboard 📊":
@@ -455,8 +486,6 @@ def main():
         with col2:
             if st.button("Export to Excel"):
                 export_data(df, "campaign_data", 'excel')
-    
-    # ... rest of your existing code
     
     elif page == "Optimization Engine 🎯":
         # Budget and customers input
