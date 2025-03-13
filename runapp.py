@@ -414,6 +414,243 @@ def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COS
     # [Previous implementation remains unchanged]
     pass
 
+
+def simulate_scenario(df, scenario_type, parameters):
+    """
+    Simulate different marketing scenarios based on the selected type and parameters
+    
+    Args:
+        df: Original campaign dataframe
+        scenario_type: Type of scenario to simulate
+        parameters: Dictionary of scenario-specific parameters
+    
+    Returns:
+        Modified dataframe based on scenario
+    """
+    # Create a copy of the dataframe to avoid modifying the original
+    scenario_df = df.copy()
+    
+    if scenario_type == "Budget Variation":
+        # Apply budget adjustment factor to ad spend
+        budget_factor = parameters.get('budget_factor', 1.0)
+        scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * budget_factor
+        
+        # Estimate new reach based on adjusted spend
+        # Using a logarithmic relationship between spend and reach
+        scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * (
+            1 + np.log1p(budget_factor - 1) * parameters.get('elasticity', 0.7)
+        )
+        
+        # Adjust engagement based on diminishing returns
+        if budget_factor > 1:
+            # Slight decrease in engagement with higher spend (saturation)
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * (
+                1 - (budget_factor - 1) * 0.1
+            )
+        else:
+            # Slight increase in engagement with lower spend (targeting)
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * (
+                1 + (1 - budget_factor) * 0.05
+            )
+            
+    elif scenario_type == "Target Audience Change":
+        # Apply audience targeting adjustments
+        audience_focus = parameters.get('audience_focus', 'Broad')
+        
+        if audience_focus == 'Narrow':
+            # Higher engagement but lower reach
+            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 0.7
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.4
+            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 0.9
+        elif audience_focus == 'Balanced':
+            # Moderate adjustments
+            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 0.9
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.2
+            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.0
+        else:  # Broad
+            # Higher reach but lower engagement
+            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 1.3
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 0.8
+            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.1
+    
+    elif scenario_type == "Seasonal Impact":
+        # Apply seasonal factors
+        season = parameters.get('season', 'Normal')
+        
+        if season == 'Peak':
+            # High season - better performance but more expensive
+            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 1.25
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.15
+            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.2
+        elif season == 'Low':
+            # Off season - cheaper but lower performance
+            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 0.8
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 0.9
+            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 0.85
+        else:  # Normal
+            # Standard season
+            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 1.0
+            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.0
+            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.0
+    
+    # Calculate adjusted metrics for all scenarios
+    scenario_df['ROI'] = (scenario_df['Estimated Reach'] * scenario_df['Adjusted Engagement']) / scenario_df['Adjusted Ad Spend']
+    scenario_df['Efficiency Score'] = (scenario_df['Estimated Reach'] / scenario_df['Adjusted Ad Spend']) * scenario_df['Adjusted Engagement']
+    
+    return scenario_df
+
+def display_scenario_comparison(original_df, scenario_df, scenario_type, parameters):
+    """Display comparison between original data and scenario simulation"""
+    st.subheader(f"Scenario Analysis: {scenario_type}")
+    
+    # Display scenario parameters
+    st.write("Scenario Parameters:")
+    for param, value in parameters.items():
+        st.write(f"- **{param.replace('_', ' ').title()}**: {value}")
+    
+    # Key metrics comparison
+    original_total_reach = original_df['Historical Reach'].sum()
+    scenario_total_reach = scenario_df['Estimated Reach'].sum()
+    
+    original_total_spend = original_df['Ad Spend'].sum()
+    scenario_total_spend = scenario_df['Adjusted Ad Spend'].sum()
+    
+    # Create metrics display
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            "Total Reach", 
+            f"{scenario_total_reach:,.0f}",
+            f"{(scenario_total_reach - original_total_reach) / original_total_reach:.1%}"
+        )
+    
+    with col2:
+        st.metric(
+            "Total Ad Spend", 
+            f"${scenario_total_spend:,.2f}",
+            f"{(scenario_total_spend - original_total_spend) / original_total_spend:.1%}"
+        )
+    
+    with col3:
+        original_efficiency = original_total_reach / original_total_spend
+        scenario_efficiency = scenario_total_reach / scenario_total_spend
+        
+        st.metric(
+            "Reach Efficiency", 
+            f"{scenario_efficiency:.2f} per $",
+            f"{(scenario_efficiency - original_efficiency) / original_efficiency:.1%}"
+        )
+    
+    # Visual comparison
+    st.subheader("Campaign Performance Comparison")
+    
+    # Prepare comparison data
+    comparison_data = pd.DataFrame({
+        'Campaign': original_df['Campaign'],
+        'Original Reach': original_df['Historical Reach'],
+        'Scenario Reach': scenario_df['Estimated Reach'],
+        'Original Spend': original_df['Ad Spend'],
+        'Scenario Spend': scenario_df['Adjusted Ad Spend'],
+    })
+    
+    # Create reach comparison chart
+    reach_fig = px.bar(
+        comparison_data,
+        x='Campaign',
+        y=['Original Reach', 'Scenario Reach'],
+        barmode='group',
+        title='Reach Comparison by Campaign',
+        labels={'value': 'Reach', 'variable': 'Scenario'}
+    )
+    st.plotly_chart(reach_fig, use_container_width=True)
+    
+    # Create spend comparison chart
+    spend_fig = px.bar(
+        comparison_data,
+        x='Campaign',
+        y=['Original Spend', 'Scenario Spend'],
+        barmode='group',
+        title='Spend Comparison by Campaign',
+        labels={'value': 'Ad Spend ($)', 'variable': 'Scenario'}
+    )
+    st.plotly_chart(spend_fig, use_container_width=True)
+    
+    # Display detailed comparison table
+    st.subheader("Detailed Metrics Comparison")
+    
+    detailed_comparison = pd.DataFrame({
+        'Campaign': original_df['Campaign'],
+        'Original Reach': original_df['Historical Reach'],
+        'Scenario Reach': scenario_df['Estimated Reach'],
+        'Reach Δ%': (scenario_df['Estimated Reach'] - original_df['Historical Reach']) / original_df['Historical Reach'] * 100,
+        'Original Spend': original_df['Ad Spend'],
+        'Scenario Spend': scenario_df['Adjusted Ad Spend'],
+        'Spend Δ%': (scenario_df['Adjusted Ad Spend'] - original_df['Ad Spend']) / original_df['Ad Spend'] * 100,
+        'Original Engagement': original_df['Engagement Rate'],
+        'Scenario Engagement': scenario_df['Adjusted Engagement'],
+        'Engagement Δ%': (scenario_df['Adjusted Engagement'] - original_df['Engagement Rate']) / original_df['Engagement Rate'] * 100
+    })
+    
+    # Format the table
+    styled_comparison = detailed_comparison.style.format({
+        'Original Reach': '{:,.0f}',
+        'Scenario Reach': '{:,.0f}',
+        'Reach Δ%': '{:.1f}%',
+        'Original Spend': '${:,.2f}',
+        'Scenario Spend': '${:,.2f}',
+        'Spend Δ%': '{:.1f}%',
+        'Original Engagement': '{:.2f}',
+        'Scenario Engagement': '{:.2f}',
+        'Engagement Δ%': '{:.1f}%'
+    }).background_gradient(
+        subset=['Reach Δ%', 'Engagement Δ%'], 
+        cmap='RdYlGn'
+    )
+    
+    st.dataframe(styled_comparison)
+    
+    # AI-generated insights
+    st.subheader("Scenario Insights")
+    
+    insights = []
+    
+    # Generate insights based on scenario results
+    if scenario_total_reach > original_total_reach and scenario_total_spend <= original_total_spend:
+        insights.append("✅ This scenario achieves higher reach with the same or lower budget")
+    elif scenario_total_reach > original_total_reach and scenario_total_spend > original_total_spend:
+        if (scenario_total_reach / original_total_reach) > (scenario_total_spend / original_total_spend):
+            insights.append("✅ This scenario is more efficient despite higher costs")
+        else:
+            insights.append("⚠️ This scenario increases reach but at a disproportionately higher cost")
+    elif scenario_total_reach < original_total_reach and scenario_total_spend < original_total_spend:
+        if (scenario_total_reach / original_total_reach) > (scenario_total_spend / original_total_spend):
+            insights.append("✅ This scenario saves budget while maintaining relative efficiency")
+        else:
+            insights.append("⚠️ This scenario reduces costs but significantly impacts campaign performance")
+    
+    # Campaign-specific insights
+    best_campaign = comparison_data.loc[
+        comparison_data['Reach Δ%'].idxmax() if 'Reach Δ%' in comparison_data.columns 
+        else comparison_data.index[0]
+    ]
+    
+    insights.append(f"🔍 {best_campaign['Campaign']} shows the most improvement in this scenario")
+    
+    for insight in insights:
+        st.markdown(insight)
+    
+    # Recommendation based on scenario
+    st.subheader("Recommendation")
+    
+    if scenario_efficiency > original_efficiency * 1.1:
+        st.success("This scenario shows significant improvements and is recommended for implementation")
+    elif scenario_efficiency > original_efficiency:
+        st.info("This scenario shows moderate improvements and could be considered with careful monitoring")
+    else:
+        st.warning("This scenario does not improve overall efficiency compared to the current approach")
+
+
 def main():
     st.title("Campaign Optimization AI 🚀")
     
@@ -543,21 +780,85 @@ def main():
             else:
                 st.error("AI integration currently unavailable")
     
-    elif page == "Scenario Comparison 📈":
-        st.header("Campaign Scenario Simulator")
-        st.info("""
-        🔬 Compare different marketing allocation scenarios.
-        Experiment with budget and targeting strategies.
-        """)
+elif page == "Scenario Comparison 📈":
+    st.header("Campaign Scenario Simulator")
+    st.info("""
+    🔬 Compare different marketing allocation scenarios.
+    Experiment with budget and targeting strategies to visualize potential outcomes.
+    """)
+    
+    # Scenario selection
+    scenario_type = st.selectbox(
+        "Select Scenario Type",
+        ["Budget Variation", "Target Audience Change", "Seasonal Impact"]
+    )
+    
+    # Dynamic scenario parameters based on selection
+    parameters = {}
+    
+    if scenario_type == "Budget Variation":
+        col1, col2 = st.columns(2)
         
-        # Placeholder for scenario comparison features
-        scenario_type = st.selectbox(
-            "Select Scenario Type",
-            ["Budget Variation", "Target Audience Change", "Seasonal Impact"]
+        with col1:
+            budget_factor = st.slider(
+                "Budget Adjustment Factor", 
+                min_value=0.5, 
+                max_value=2.0, 
+                value=1.0, 
+                step=0.1,
+                help="Multiply current budget by this factor (e.g., 1.5 = 50% increase)"
+            )
+            parameters['budget_factor'] = budget_factor
+            
+        with col2:
+            elasticity = st.slider(
+                "Spend-Reach Elasticity", 
+                min_value=0.1, 
+                max_value=1.0, 
+                value=0.7,
+                step=0.1,
+                help="How responsive reach is to spend changes (higher = more responsive)"
+            )
+            parameters['elasticity'] = elasticity
+            
+    elif scenario_type == "Target Audience Change":
+        audience_focus = st.radio(
+            "Audience Targeting Strategy",
+            ["Broad", "Balanced", "Narrow"],
+            horizontal=True,
+            help="Broad = larger audience, lower engagement; Narrow = smaller audience, higher engagement"
         )
+        parameters['audience_focus'] = audience_focus
         
-        st.write(f"Scenario Comparison for: {scenario_type}")
-        # Future implementation of detailed scenario analysis
+    elif scenario_type == "Seasonal Impact":
+        season = st.radio(
+            "Seasonal Period",
+            ["Peak", "Normal", "Low"],
+            horizontal=True,
+            help="How seasonal factors affect campaign performance"
+        )
+        parameters['season'] = season
+    
+    # Run comparison button
+    if st.button("Run Scenario Comparison"):
+        with st.spinner("Simulating scenario..."):
+            # Add slight delay for visual effect
+            time.sleep(0.5)
+            
+            # Run the scenario simulation
+            scenario_df = simulate_scenario(df, scenario_type, parameters)
+            
+            # Display comparison
+            display_scenario_comparison(df, scenario_df, scenario_type, parameters)
+            
+            # Export option
+            st.download_button(
+                label="Export Scenario Results",
+                data=scenario_df.to_csv().encode('utf-8'),
+                file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
+                mime='text/csv',
+            )
+
 
 if __name__ == "__main__":
     main()
