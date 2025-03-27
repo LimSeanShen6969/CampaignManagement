@@ -884,7 +884,7 @@ def main():
             st.sidebar.success(f"Using your uploaded dataset with {len(df)} campaigns")
             
             # Add option to use a different dataset
-            if st.sidebar.button("Upload Different Dataset"):
+            if st.sidebar.button("Upload Different Dataset", key="upload_different_dataset"):
                 st.session_state.pop('user_data', None)
                 st.experimental_rerun()
         else:
@@ -905,10 +905,10 @@ def main():
         # Export functionality
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Export to CSV"):
+            if st.button("Export to CSV", key="export_csv"):
                 export_data(df, "campaign_data", 'csv')
         with col2:
-            if st.button("Export to Excel"):
+            if st.button("Export to Excel", key="export_excel"):
                 export_data(df, "campaign_data", 'excel')
     
     elif page == "Optimization Engine 🎯":
@@ -926,10 +926,11 @@ def main():
             value=100000
         )
         
-        if st.sidebar.button("Run AI-Powered Optimization"):
+        if st.sidebar.button("Run AI-Powered Optimization", key="run_optimization"):
             optimize_campaign_with_agentic_ai(df, budget, total_customers)
     
     elif page == "AI Insights 🤖":
+        # Existing AI Insights section with unique key for button
         ai_insights_section(df)
         st.header("Campaign Strategies Recommendation Powered By Gemini")
         
@@ -938,7 +939,7 @@ def main():
             "Example: What are the key factors affecting campaign reach and how can I improve my marketing efficiency?"
         )
         
-        if st.button("Generate Strategic Insights"):
+        if st.button("Generate Strategic Insights", key="generate_ai_insights"):
             # Validate the query first
             is_valid, error_message = validate_campaign_query(user_query)
             
@@ -1040,7 +1041,7 @@ def main():
             parameters['season'] = season
         
         # Run comparison button
-        if st.button("Run Scenario Comparison"):
+        if st.button("Run Scenario Comparison", key="run_scenario_comparison"):
             with st.spinner("Simulating scenario..."):
                 # Add slight delay for visual effect
                 time.sleep(0.5)
@@ -1057,6 +1058,7 @@ def main():
                     data=scenario_df.to_csv().encode('utf-8'),
                     file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
                     mime='text/csv',
+                    key="export_scenario_results"
                 )
 
 if __name__ == "__main__":
