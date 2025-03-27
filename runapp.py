@@ -836,8 +836,7 @@ def ai_insights_section(df):
                 st.write("- Consider reallocating budget from low-performing campaigns")
         else:
             st.error("AI integration currently unavailable")
-
-
+            
 def main():
     st.title("Campaign Optimization AI 🚀")
     
