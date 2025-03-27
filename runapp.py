@@ -714,15 +714,34 @@ def ai_insights_section(df):
     # Dataset details with expandable section
     with st.expander("Dataset Details"):
         st.write("### Campaign Metrics Summary")
-        summary_stats = df.agg({
+        
+        # Modified summary statistics calculation
+        summary_stats_dict = {
             'Historical Reach': ['mean', 'min', 'max'],
             'Ad Spend': ['mean', 'min', 'max'],
             'Engagement Rate': ['mean', 'median'],
             'Competitor Ad Spend': ['mean'],
             'Repeat Customer Rate': ['mean']
-        }).T
+        }
         
-        summary_stats.columns = ['Mean', 'Min', 'Max'] if len(summary_stats.columns) == 3 else ['Mean', 'Median']
+        # Dynamically create summary based on available columns
+        summary_data = {}
+        for col, agg_funcs in summary_stats_dict.items():
+            if col in df.columns:
+                summary_data[col] = df[col].agg(agg_funcs)
+        
+        # Convert to DataFrame
+        summary_stats = pd.DataFrame(summary_data).T
+        
+        # Rename columns to be consistent
+        if len(summary_stats.columns) == 3:
+            summary_stats.columns = ['Mean', 'Min', 'Max']
+        elif len(summary_stats.columns) == 2:
+            summary_stats.columns = ['Mean', 'Median']
+        
+        # Format numeric columns
+        summary_stats = summary_stats.apply(lambda x: x.apply(lambda val: f'{val:.4f}'))
+        
         st.dataframe(summary_stats)
     
     # AI Query Section
@@ -817,7 +836,6 @@ def ai_insights_section(df):
                 st.write("- Consider reallocating budget from low-performing campaigns")
         else:
             st.error("AI integration currently unavailable")
-
 
 
 def main():
