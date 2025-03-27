@@ -690,6 +690,136 @@ def validate_campaign_query(query):
     # Generic fallback for queries that don't match campaign patterns
     return False, "Please ask a specific question about campaign optimization. For example: 'How can I improve my campaign engagement?' or 'What strategies can increase marketing reach?'"
 
+def ai_insights_section(df):
+    """
+    Enhanced AI Insights section with dataset upload and context-aware insights
+    """
+    st.header("Campaign Strategies Recommendation Powered By Gemini")
+    
+    # Dataset context display
+    st.subheader("Current Dataset Overview")
+    
+    # Display basic dataset statistics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Campaigns", len(df))
+    
+    with col2:
+        st.metric("Avg Engagement Rate", f"{df['Engagement Rate'].mean():.2%}")
+    
+    with col3:
+        st.metric("Total Ad Spend", f"${df['Ad Spend'].sum():,.0f}")
+    
+    # Dataset details with expandable section
+    with st.expander("Dataset Details"):
+        st.write("### Campaign Metrics Summary")
+        summary_stats = df.agg({
+            'Historical Reach': ['mean', 'min', 'max'],
+            'Ad Spend': ['mean', 'min', 'max'],
+            'Engagement Rate': ['mean', 'median'],
+            'Competitor Ad Spend': ['mean'],
+            'Repeat Customer Rate': ['mean']
+        }).T
+        
+        summary_stats.columns = ['Mean', 'Min', 'Max'] if len(summary_stats.columns) == 3 else ['Mean', 'Median']
+        st.dataframe(summary_stats)
+    
+    # AI Query Section
+    st.subheader("Ask AI About Your Campaigns")
+    
+    # Preset context options
+    context_options = [
+        "General Strategy Recommendations",
+        "Budget Optimization",
+        "Audience Targeting",
+        "Engagement Improvement",
+        "Competitive Analysis"
+    ]
+    
+    # Context selection columns
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        user_query = st.text_input(
+            "Specific Campaign Strategy Question:",
+            placeholder="What strategies can improve my campaign performance?"
+        )
+    
+    with col2:
+        context_focus = st.selectbox(
+            "Query Context", 
+            context_options,
+            index=0
+        )
+    
+    # Gemini AI Integration
+    if st.button("Generate Strategic Insights"):
+        # Validate the query first
+        is_valid, error_message = validate_campaign_query(user_query)
+        
+        if not is_valid:
+            st.warning(error_message)
+        elif client:
+            try:
+                with st.spinner("Analyzing campaign data..."):
+                    # Prepare comprehensive data context
+                    data_context = f"""
+                    Campaign Dataset Overview:
+                    - Total Campaigns: {len(df)}
+                    - Metrics: {', '.join(df.columns)}
+                    
+                    Key Statistics:
+                    - Average Engagement Rate: {df['Engagement Rate'].mean():.2f}
+                    - Total Ad Spend: ${df['Ad Spend'].sum():,.2f}
+                    - Average Historical Reach: {df['Historical Reach'].mean():,.0f}
+                    - Repeat Customer Rate: {df['Repeat Customer Rate'].mean():.2f}
+                    
+                    Top Performing Campaigns:
+                    {df.nlargest(3, 'Engagement Rate')[['Campaign', 'Engagement Rate', 'Ad Spend']].to_string()}
+                    
+                    Campaign Performance Distribution:
+                    - Engagement Rate Range: {df['Engagement Rate'].min():.2f} - {df['Engagement Rate'].max():.2f}
+                    - Ad Spend Range: ${df['Ad Spend'].min():,.0f} - ${df['Ad Spend'].max():,.0f}
+                    
+                    Specific Context: {context_focus}
+                    
+                    Specific User Query: {user_query}
+                    
+                    Request:
+                    1. Provide data-driven marketing strategy insights
+                    2. Focus on actionable recommendations
+                    3. Explain reasoning using the provided campaign metrics
+                    4. Tailor advice to the specified context: {context_focus}
+                    """
+                    
+                    # Generate AI response
+                    response = client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=data_context
+                    )
+                    
+                    # Display AI insights
+                    st.markdown("### 🧠 AI Strategic Insights")
+                    st.write(response.text)
+                    
+                    # Optional: Highlight key takeaways
+                    st.subheader("Key Recommendations")
+                    key_points = response.text.split('\n')[:5]  # First 5 lines as key points
+                    for point in key_points:
+                        if point.strip():  # Skip empty lines
+                            st.markdown(f"- {point}")
+            
+            except Exception as e:
+                st.error(f"AI Insight Generation Error: {e}")
+                st.write("Fallback Insights:")
+                st.write("- Review campaigns with high engagement rates")
+                st.write("- Consider reallocating budget from low-performing campaigns")
+        else:
+            st.error("AI integration currently unavailable")
+
+
+
 def main():
     st.title("Campaign Optimization AI 🚀")
     
@@ -782,6 +912,7 @@ def main():
             optimize_campaign_with_agentic_ai(df, budget, total_customers)
     
     elif page == "AI Insights 🤖":
+        ai_insights_section(df)
         st.header("Campaign Strategies Recommendation Powered By Gemini")
         
         user_query = st.text_area(
