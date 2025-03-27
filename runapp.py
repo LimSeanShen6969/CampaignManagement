@@ -414,7 +414,6 @@ def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COS
     # [Previous implementation remains unchanged]
     pass
 
-
 def simulate_scenario(df, scenario_type, parameters):
     """
     Simulate different marketing scenarios based on the selected type and parameters
@@ -650,6 +649,47 @@ def display_scenario_comparison(original_df, scenario_df, scenario_type, paramet
     else:
         st.warning("This scenario does not improve overall efficiency compared to the current approach")
 
+def validate_campaign_query(query):
+    """
+    Validate if the query is related to campaign optimization
+    
+    Uses a pattern-based approach to determine campaign relevance
+    """
+    import re
+    
+    # Convert query to lowercase
+    lower_query = query.lower()
+    
+    # Check if the query is too short or generic
+    if len(lower_query.strip()) < 10:
+        return False, "Please provide a more detailed question about campaign optimization."
+    
+    # Regex patterns for campaign-related queries
+    campaign_patterns = [
+        r'\b(campaign|marketing|ad|advertis(ing|e))\b',
+        r'\b(optimize|improve|strategy|reach|engagement)\b',
+        r'\b(budget|spend|performance|target(ing)?)\b',
+        r'\b(customer|audience|conversion)\b'
+    ]
+    
+    # Check if any campaign-related pattern matches
+    if any(re.search(pattern, lower_query) for pattern in campaign_patterns):
+        return True, ""
+    
+    # Specific blocking for non-campaign topics
+    non_campaign_patterns = [
+        r'\b(news|current\s*events|politics|celebrity|personal)\b',
+        r'\b(trump|biden|president|world\s*leader)\b',
+        r'\b(sports|entertainment|gossip)\b'
+    ]
+    
+    # Block queries matching non-campaign patterns
+    if any(re.search(pattern, lower_query) for pattern in non_campaign_patterns):
+        return False, "I am designed to provide insights specifically for campaign optimization. Please ask a question related to marketing campaigns, strategy, or performance."
+    
+    # Generic fallback for queries that don't match campaign patterns
+    return False, "Please ask a specific question about campaign optimization. For example: 'How can I improve my campaign engagement?' or 'What strategies can increase marketing reach?'"
+
 def main():
     st.title("Campaign Optimization AI 🚀")
     
@@ -750,17 +790,29 @@ def main():
         )
         
         if st.button("Generate Strategic Insights"):
-            if client:
+            # Validate the query first
+            is_valid, error_message = validate_campaign_query(user_query)
+            
+            if not is_valid:
+                st.warning(error_message)
+            elif client:
                 try:
                     with st.spinner("Analyzing campaign data..."):
                         prompt = f"""
-                        Campaign Data Analysis:
-                        {df.to_string()}
+                        Campaign Data Overview:
+                        Total Campaigns: {len(df)}
+                        Metrics: {', '.join(df.columns)}
+                        
+                        Key Statistics:
+                        - Average Engagement Rate: {df['Engagement Rate'].mean():.2f}
+                        - Total Ad Spend: ${df['Ad Spend'].sum():,.2f}
+                        - Average Historical Reach: {df['Historical Reach'].mean():,.0f}
                         
                         User Strategic Query: {user_query}
                         
-                        Provide data-driven marketing strategy insights.
-                        Focus on actionable recommendations.
+                        Provide concise, data-driven marketing strategy insights.
+                        Focus on actionable recommendations based on the campaign data.
+                        Explain your reasoning using the provided metrics.
                         """
                         
                         response = client.models.generate_content(
@@ -857,7 +909,6 @@ def main():
                     file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
                     mime='text/csv',
                 )
-
 
 if __name__ == "__main__":
     main()
