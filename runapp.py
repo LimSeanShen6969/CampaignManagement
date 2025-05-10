@@ -103,38 +103,28 @@ gemini_service = initialize_gemini_client()
 # validate_campaign_query
 
 # --- Core Data Processing & Helper Functions ---
-@st.cache_data(ttl=3600)
-def load_sample_data(num_campaigns=10): # Increased sample size
-    np.random.seed(42)
-    data = {
-        "Campaign": [f"Campaign Alpha {i+1}" if i % 2 == 0 else f"Campaign Beta {i//2+1}" for i in range(num_campaigns)],
-        "Historical Reach": np.random.randint(5000, 150000, num_campaigns),
-        "Ad Spend": np.random.uniform(1000, 30000, num_campaigns),
-        "Engagement Rate": np.round(np.random.uniform(0.005, 0.15, num_campaigns), 4), # More realistic engagement
-        "Conversion Rate": np.round(np.random.uniform(0.001, 0.05, num_campaigns), 4), # Added metric
-        "Average CPC": np.round(np.random.uniform(0.1, 2.5, num_campaigns), 2), # Cost Per Click
-        "Competitor Ad Spend": np.random.uniform(5000, 40000, num_campaigns),
-        "Seasonality Factor": np.random.choice([0.8, 0.9, 1.0, 1.1, 1.2], num_campaigns, p=[0.1,0.2,0.4,0.2,0.1]),
-        "Repeat Customer Rate": np.round(np.random.uniform(0.05, 0.45, num_campaigns), 3),
-        "Target Audience Segment": np.random.choice(["Gen Z", "Millennials", "Gen X", "Broad", "Parents"], num_campaigns)
-    }
-    df = pd.DataFrame(data)
-    df['Ad Spend'] = df['Ad Spend'].round(2)
-    df['Competitor Ad Spend'] = df['Competitor Ad Spend'].round(2)
-
-    # Derived Metrics (Crucial for Agent Analysis)
-    df['Cost Per Reach'] = df['Ad Spend'] / df['Historical Reach']
-    df['ROAS_proxy'] = (df['Historical Reach'] * df['Engagement Rate'] * df['Conversion Rate'] * 50) / df['Ad Spend'] # Assuming $50 avg order value
-    df['Engagement_per_Dollar'] = (df['Historical Reach'] * df['Engagement Rate']) / df['Ad Spend']
-    df['Potential Growth Score'] = df['Repeat Customer Rate'] * df['Seasonality Factor'] * (1 - (df['Ad Spend'] / (df['Ad Spend'] + df['Competitor Ad Spend']))) # Market share proxy
-    df.replace([np.inf, -np.inf], np.nan, inplace=True) # Handle potential divisions by zero
-    df.fillna(0, inplace=True) # Fill NaNs that might arise
-    return df
-
-def get_data_summary(df):
+@st.cache_data(ttl=3600) # Keep this decorator
+def get_data_summary(df): # df here is the full dataframe (e.g., self.current_df)
     if df is None or df.empty:
         return "No data available for summary."
+
+    # Create numeric_df for aggregated statistics on numeric columns only
     numeric_df = df.select_dtypes(include=np.number)
+    if numeric_df.empty and not df.empty: # If df has rows but no numeric columns
+        summary = f"""
+        Dataset Overview:
+        - Total Campaigns: {len(df)}
+        - Key Metrics: {', '.join(df.columns)}
+        - No numeric data found for aggregated statistics.
+        """
+        # Attempt to show top/bottom performers based on a non-numeric column if sensible, or skip
+        if 'Campaign' in df.columns:
+            summary += f"\nFirst 3 Campaigns listed:\n{df[['Campaign']].head(3).to_string(index=False)}"
+        return summary
+    elif numeric_df.empty and df.empty: # df is truly empty
+         return "No data available for summary."
+
+
     summary = f"""
     Dataset Overview:
     - Total Campaigns: {len(df)}
@@ -148,17 +138,34 @@ def get_data_summary(df):
     - Average ROAS (Proxy): {numeric_df['ROAS_proxy'].mean():.2f}
     - Overall Cost Per Reach: ${(numeric_df['Ad Spend'].sum() / numeric_df['Historical Reach'].sum()) if numeric_df['Historical Reach'].sum() > 0 else 0:.2f}
 
-    Performance Ranges:
-    - Engagement Rate: {numeric_df['Engagement Rate'].min():.2%} - {numeric_df['Engagement Rate'].max():.2%}
-    - Ad Spend per Campaign: ${numeric_df['Ad Spend'].min():,.0f} - ${numeric_df['Ad Spend'].max():,.0f}
-    - ROAS (Proxy) per Campaign: {numeric_df['ROAS_proxy'].min():.2f} - {numeric_df['ROAS_proxy'].max():.2f}
-    """
-    # Top/Bottom Performers (example for ROAS)
+    Performance Ranges (based on available numeric columns):"""
+    if 'Engagement Rate' in numeric_df.columns:
+        summary += f"\n    - Engagement Rate: {numeric_df['Engagement Rate'].min():.2%} - {numeric_df['Engagement Rate'].max():.2%}"
+    if 'Ad Spend' in numeric_df.columns:
+        summary += f"\n    - Ad Spend per Campaign: ${numeric_df['Ad Spend'].min():,.0f} - ${numeric_df['Ad Spend'].max():,.0f}"
     if 'ROAS_proxy' in numeric_df.columns:
-        top_roas = numeric_df.nlargest(3, 'ROAS_proxy')[['Campaign', 'ROAS_proxy', 'Ad Spend']]
-        bottom_roas = numeric_df.nsmallest(3, 'ROAS_proxy')[['Campaign', 'ROAS_proxy', 'Ad Spend']]
-        summary += f"\nTop 3 Campaigns by ROAS (Proxy):\n{top_roas.to_string(index=False)}"
-        summary += f"\nBottom 3 Campaigns by ROAS (Proxy):\n{bottom_roas.to_string(index=False)}\n"
+        summary += f"\n    - ROAS (Proxy) per Campaign: {numeric_df['ROAS_proxy'].min():.2f} - {numeric_df['ROAS_proxy'].max():.2f}"
+    summary += "\n"
+
+
+    # Top/Bottom Performers (example for ROAS)
+    # Use the original 'df' here, which contains 'Campaign', 'Ad Spend' etc.
+    if 'ROAS_proxy' in df.columns and pd.api.types.is_numeric_dtype(df['ROAS_proxy']):
+        # Ensure required columns for display exist in the original df
+        display_columns = ['Campaign', 'ROAS_proxy', 'Ad Spend']
+        if all(col in df.columns for col in display_columns):
+            num_to_display = min(3, len(df)) # Display up to 3, or fewer if less data
+            if num_to_display > 0:
+                top_roas = df.nlargest(num_to_display, 'ROAS_proxy')[display_columns]
+                bottom_roas = df.nsmallest(num_to_display, 'ROAS_proxy')[display_columns]
+                summary += f"\nTop {num_to_display} Campaigns by ROAS (Proxy):\n{top_roas.to_string(index=False)}"
+                summary += f"\nBottom {num_to_display} Campaigns by ROAS (Proxy):\n{bottom_roas.to_string(index=False)}\n"
+            else:
+                summary += "\nNot enough data to display top/bottom ROAS campaigns.\n"
+        else:
+            summary += "\nCannot display top/bottom ROAS campaigns due to missing 'Campaign' or 'Ad Spend' columns in the dataset.\n"
+    else:
+        summary += "\nROAS_proxy column not found or not numeric, cannot display top/bottom ROAS performers.\n"
     return summary
 
 # --- Agent Class ---
