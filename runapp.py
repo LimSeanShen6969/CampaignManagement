@@ -1,32 +1,24 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt # Keep for potential future direct plotting
-import seaborn as sns # Keep for potential future direct plotting
+import matplotlib.pyplot as plt
+import seaborn as sns
 import re
 import time
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objs as go
 
-# Attempt to import the correct Gemini library
 try:
     import google.generativeai as genai
     GOOGLE_GEMINI_SDK_AVAILABLE = True
 except ImportError:
     st.error("FATAL: google-generativeai SDK not found. Please add 'google-generativeai' to your requirements.txt and redeploy.")
     GOOGLE_GEMINI_SDK_AVAILABLE = False
-    genai = None # Define genai as None so later checks don't cause NameError
+    genai = None
 
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="Agentic Campaign Optimizer",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Agentic Campaign Optimizer", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
 
-# --- Custom CSS ---
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1rem; background-color: #f0f2f6; }
@@ -39,7 +31,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Initialize Gemini API (Modern Pattern) ---
 @st.cache_resource
 def initialize_gemini_model():
     if not GOOGLE_GEMINI_SDK_AVAILABLE:
@@ -69,7 +60,6 @@ def initialize_gemini_model():
 
 gemini_model_instance = initialize_gemini_model()
 
-# --- Core Data Processing & Helper Functions ---
 @st.cache_data(ttl=3600)
 def load_sample_data(num_campaigns=15):
     np.random.seed(42)
@@ -122,7 +112,6 @@ def get_data_summary(df):
                 summary_parts.append(f"Bottom {num_to_display} Campaigns by ROAS (Proxy):\n{df.nsmallest(num_to_display, 'ROAS_proxy')[display_cols].to_string(index=False)}")
     return "\n".join(summary_parts)
 
-# --- Agent Class ---
 class CampaignStrategyAgent:
     def __init__(self, gemini_model, initial_df):
         self.gemini_model = gemini_model
@@ -198,10 +187,13 @@ class CampaignStrategyAgent:
         self.strategy_options = []
         if raw_strategies and "--- STRATEGY START ---" in raw_strategies and not any(err_msg in str(raw_strategies).lower() for err_msg in ["gemini model not available", "error calling gemini", "could not extract text"]):
             options = raw_strategies.split("--- STRATEGY START ---")[1:]
-            for opt_text in options:
+            for i, opt_text in enumerate(options): # Added enumerate for fallback
                 opt_text = opt_text.replace("--- STRATEGY END ---", "").strip()
-                name = re.search(r"Strategy Name:\s*(.*)", opt_text); desc = re.search(r"Description:\s*(.*)", opt_text)
-                self.strategy_options.append({"name": name.group(1).strip() if name else "Unnamed Strategy", "description": desc.group(1).strip() if desc else "No description.", "full_text": opt_text})
+                name_match = re.search(r"Strategy Name:\s*(.*)", opt_text)
+                desc_match = re.search(r"Description:\s*(.*)", opt_text)
+                strategy_name = name_match.group(1).strip() if name_match and name_match.group(1).strip() else f"Unnamed Strategy {i+1}" # Fallback
+                description = desc_match.group(1).strip() if desc_match and desc_match.group(1).strip() else "No description provided."
+                self.strategy_options.append({"name": strategy_name, "description": description, "full_text": opt_text})
         elif raw_strategies and not any(err_msg in str(raw_strategies).lower() for err_msg in ["gemini model not available", "error calling gemini", "could not extract text"]):
              self.strategy_options.append({"name": "LLM Fallback Strategy", "description": raw_strategies, "full_text": raw_strategies})
         else: self._add_log(f"Failed to parse strategies or LLM call failed during strategy dev: '{str(raw_strategies)[:100]}...'")
@@ -244,9 +236,26 @@ class CampaignStrategyAgent:
         self._add_log("Generating final report..."); st.session_state.agent_state = "reporting"
         summary_opt_results = "No optimization results to summarize."
         if self.optimization_results is not None and not self.optimization_results.empty:
-            opt_roas_mean = self.optimization_results['Optimized ROAS_proxy'].mean() if 'Optimized ROAS_proxy' in self.optimization_results else 'N/A'
-            opt_roas_str = f"{opt_roas_mean:.2f}" if isinstance(opt_roas_mean, (int, float)) else opt_roas_mean
-            summary_opt_results = f"Original Total Spend: ${self.initial_df['Ad Spend'].sum():,.2f}\nOptimized Total Spend: ${self.optimization_results['Optimized Spend'].sum():,.2f}\nOriginal Total Reach: {self.initial_df['Historical Reach'].sum():,.0f}\nOptimized Total Reach: {self.optimization_results['Optimized Reach'].sum():,.0f}\nOriginal Avg ROAS_proxy: {self.initial_df['ROAS_proxy'].mean():.2f}\nOptimized Avg ROAS_proxy: {opt_roas_str}\nTop 5 Optimized Campaigns:\n{(self.optimization_results.nlargest(5, 'Optimized Spend').to_string(index=False) if 'Optimized Spend' in self.optimization_results else 'N/A')}"
+            opt_roas_mean_val = self.optimization_results['Optimized ROAS_proxy'].mean() if 'Optimized ROAS_proxy' in self.optimization_results.columns and not self.optimization_results['Optimized ROAS_proxy'].empty else 'N/A'
+            opt_roas_str = f"{opt_roas_mean_val:.2f}" if isinstance(opt_roas_mean_val, (int, float)) else opt_roas_mean_val
+            
+            init_roas_mean_val = self.initial_df['ROAS_proxy'].mean() if 'ROAS_proxy' in self.initial_df.columns and not self.initial_df['ROAS_proxy'].empty else 'N/A'
+            init_roas_str = f"{init_roas_mean_val:.2f}" if isinstance(init_roas_mean_val, (int, float)) else init_roas_mean_val
+
+            top_5_opt_campaigns_str = 'N/A'
+            if 'Optimized Spend' in self.optimization_results.columns and not self.optimization_results.empty:
+                top_5_opt_campaigns_str = self.optimization_results.nlargest(5, 'Optimized Spend').to_string(index=False)
+
+
+            summary_opt_results = (
+                f"Original Total Spend: ${self.initial_df['Ad Spend'].sum():,.2f}\n"
+                f"Optimized Total Spend: ${self.optimization_results['Optimized Spend'].sum():,.2f}\n"
+                f"Original Total Reach: {self.initial_df['Historical Reach'].sum():,.0f}\n"
+                f"Optimized Total Reach: {self.optimization_results['Optimized Reach'].sum():,.0f}\n"
+                f"Original Avg ROAS_proxy: {init_roas_str}\n"
+                f"Optimized Avg ROAS_proxy: {opt_roas_str}\n"
+                f"Top 5 Optimized Campaigns:\n{top_5_opt_campaigns_str}"
+            )
         report_context = f"Goal: {self.current_goal['description']}\nAnalysis: {st.session_state.get('analysis_insights', 'N/A')}\nStrategy: {self.chosen_strategy_details.get('name', 'N/A') if self.chosen_strategy_details else 'N/A'}\nOptimization Overview:\n{summary_opt_results}\nProvide: Summary of AI actions, Key Outcomes (vs. original), Actionable Recommendations (3-5), Potential Next Steps."
         self._add_log("Querying LLM for final report..."); self.recommendations = self._call_gemini(report_context)
         self._add_log(f"Final report from LLM: '{str(self.recommendations)[:100]}...'")
@@ -299,11 +308,11 @@ def main():
         st.subheader("Agent Log")
         if 'agent_log' in st.session_state:
             log_container = st.container(height=200)
-            for log_entry in reversed(st.session_state.agent_log): # Corrected list comprehension to simple loop
+            for log_entry in reversed(st.session_state.agent_log):
                 log_container.text(log_entry)
         if st.button("Reset Agent & Data"):
             keys_to_clear = list(st.session_state.keys())
-            for key_to_del in keys_to_clear: # Corrected loop for deletion
+            for key_to_del in keys_to_clear: # Corrected loop
                 if key_to_del in st.session_state:
                     del st.session_state[key_to_del]
             st.rerun()
@@ -359,18 +368,50 @@ def main():
         with st.container(border=True):
             st.markdown("<p class='agent-thought'>Agent compiling report...</p>", unsafe_allow_html=True)
             if 'optimization_results_df' in st.session_state and not st.session_state.optimization_results_df.empty:
-                 st.write("#### Optimized Campaign Allocation:"); opt_df = st.session_state.optimization_results_df
-                 if not agent.initial_df.empty and all(c in agent.initial_df.columns for c in ['Campaign', 'Ad Spend']) and all(c in opt_df.columns for c in ['Campaign', 'Optimized Spend']):
-                     comparison_df = agent.initial_df[['Campaign', 'Ad Spend']].copy().merge(opt_df[['Campaign', 'Optimized Spend']], on='Campaign', suffixes=('_orig', '_opt'), how='left')
-                     fig = go.Figure(); fig.add_trace(go.Bar(name='Original Spend', x=comparison_df['Campaign'], y=comparison_df['Ad Spend_orig'])); fig.add_trace(go.Bar(name='Optimized Spend', x=comparison_df['Campaign'], y=comparison_df['Optimized Spend']))
-                     fig.update_layout(barmode='group', title_text='Original vs. Optimized Spend'); st.plotly_chart(fig, use_container_width=True)
-                 st.dataframe(st.session_state.optimization_results_df)
+                st.write("#### Optimized Campaign Allocation:")
+                opt_df = st.session_state.optimization_results_df # This is the optimized dataframe
+
+                if not agent.initial_df.empty and \
+                   all(c in agent.initial_df.columns for c in ['Campaign', 'Ad Spend']) and \
+                   not opt_df.empty and \
+                   all(c in opt_df.columns for c in ['Campaign', 'Optimized Spend']):
+
+                    # Explicitly prepare the original data part
+                    original_spend_df = agent.initial_df[['Campaign', 'Ad Spend']].copy()
+                    original_spend_df.rename(columns={'Ad Spend': 'Ad Spend_orig'}, inplace=True)
+
+                    # Merge this with the relevant columns from the optimized data
+                    comparison_df = original_spend_df.merge(
+                        opt_df[['Campaign', 'Optimized Spend']],
+                        on='Campaign',
+                        how='left' # Use left merge to keep all original campaigns
+                    )
+                    comparison_df['Optimized Spend'] = comparison_df['Optimized Spend'].fillna(0) # Fill NaNs if a campaign wasn't in opt_df or had no opt spend
+
+                    if 'Ad Spend_orig' in comparison_df.columns and 'Optimized Spend' in comparison_df.columns:
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(name='Original Spend', x=comparison_df['Campaign'], y=comparison_df['Ad Spend_orig']))
+                        fig.add_trace(go.Bar(name='Optimized Spend', x=comparison_df['Campaign'], y=comparison_df['Optimized Spend']))
+                        fig.update_layout(barmode='group', title_text='Original vs. Optimized Spend')
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning("Could not generate spend comparison chart due to missing 'Ad Spend_orig' or 'Optimized Spend' after merge.")
+                else:
+                    st.warning("Could not generate spend comparison chart due to missing columns in initial or optimized data.")
+                st.dataframe(opt_df) # Display the full optimized data
+            else:
+                st.info("No optimization results to display yet.")
+
             final_recs = st.session_state.get('final_recommendations', '')
-            if any(err_msg in str(final_recs).lower() for err_msg in ["error", "gemini model not available", "could not extract text"]): st.error(f"AI Report Generation Error: {final_recs}")
-            elif final_recs: st.markdown(final_recs)
+            if any(err_msg in str(final_recs).lower() for err_msg in ["error", "gemini model not available", "could not extract text"]):
+                st.error(f"AI Report Generation Error: {final_recs}")
+            elif final_recs:
+                st.markdown(final_recs)
             else:
                 if st.button("Generate Final Report", type="primary"):
-                    with st.spinner("Agent generating report..."): agent.generate_final_report_and_recommendations(); st.rerun()
+                    with st.spinner("Agent generating report..."):
+                        agent.generate_final_report_and_recommendations()
+                        st.rerun()
 
     elif ui_state == "done":
         st.subheader("✅ Agent Task Completed")
