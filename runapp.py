@@ -13,8 +13,8 @@ import plotly.graph_objs as go
 try:
     from google import generativeai as genai
 except ImportError:
-    st.error("Google Generative AI SDK not found. Please install it: pip install google-generativeai")
-    genai = None # Allows app to load but Gemini features will be disabled
+    st.error("Google Generative AI SDK not found. Please install it.")
+    genai = None
 
 from sklearn.preprocessing import StandardScaler # For Radar Chart if re-enabled
 # from scipy.optimize import linprog # For future advanced optimization
@@ -49,31 +49,20 @@ def initialize_gemini_client():
     try:
         # Ensure your secret is named "gemini_api" in st.secrets
         api_key = st.secrets["gemini_api"]
-        # This client initialization assumes a pattern like client.models.generate_content(...)
-        # which might be for a specific version or the older google-api-python-client for Generative AI.
-        # For the newer `google-generativeai` library, you usually do:
-        # genai.configure(api_key=api_key)
-        # client = genai.GenerativeModel('gemini-1.5-flash-latest')
-        # And call client.generate_content(...)
-        # However, to match your original intention and the _call_gemini structure:
+        # This assumes your installed 'google.genai' supports this Client structure.
         client = genai.Client(api_key=api_key)
+        st.success("Gemini Client initialized successfully using genai.Client.") # Add a success message for debugging
         return client
     except KeyError as e:
         st.error(f"Failed to initialize Gemini API: Secret key '{e.args[0]}' not found in st.secrets.")
         st.info(f"Your code is looking for: st.secrets[\"{e.args[0]}\"]. Ensure it's in your secrets.toml or Streamlit Cloud app settings.")
         return None
-    except AttributeError: # If genai.Client is not available (e.g. using newer SDK without this class)
-        st.warning("Using newer Gemini SDK structure. Attempting alternative initialization.")
-        try:
-            api_key = st.secrets["gemini_api"]
-            genai.configure(api_key=api_key)
-            # Return the configured module or a specific model instance
-            return genai.GenerativeModel('gemini-1.5-flash-latest') # Or your preferred model
-        except Exception as e_alt:
-            st.error(f"Alternative Gemini API initialization failed: {e_alt}")
-            return None
+    except AttributeError as e_attr: # Catch if genai.Client itself doesn't exist
+        st.error(f"Failed to initialize Gemini API: The 'google.genai' module in your environment does not have a 'Client' attribute. Error: {e_attr}")
+        st.info("This might indicate an issue with your google-generativeai SDK installation or version. Try 'pip install --upgrade google-generativeai'.")
+        return None
     except Exception as e:
-        st.error(f"Failed to initialize Gemini API: {e}")
+        st.error(f"Failed to initialize Gemini API with genai.Client: {e}")
         return None
 
 gemini_client_instance = initialize_gemini_client()
@@ -95,10 +84,8 @@ def load_sample_data(num_campaigns=15):
     df = pd.DataFrame(data)
     df['Ad Spend'] = df['Ad Spend'].round(2)
     df['Competitor Ad Spend'] = df['Competitor Ad Spend'].round(2)
-
-    # Derived Metrics
     df['Cost Per Reach'] = (df['Ad Spend'] / df['Historical Reach']).replace([np.inf, -np.inf], 0)
-    df['Est Revenue Per Conversion'] = np.random.uniform(30, 150, num_campaigns).round(2) # Added for ROAS
+    df['Est Revenue Per Conversion'] = np.random.uniform(30, 150, num_campaigns).round(2)
     df['Conversions'] = (df['Historical Reach'] * df['Engagement Rate'] * df['Conversion Rate']).round(0)
     df['Total Estimated Revenue'] = df['Conversions'] * df['Est Revenue Per Conversion']
     df['ROAS_proxy'] = (df['Total Estimated Revenue'] / df['Ad Spend']).replace([np.inf, -np.inf], 0)
@@ -132,8 +119,7 @@ def get_data_summary(df):
         if 'ROAS_proxy' in numeric_df.columns: add_stat("ROAS (Proxy) per Campaign", f"{numeric_df['ROAS_proxy'].min():.2f} - {numeric_df['ROAS_proxy'].max():.2f}")
     else:
         summary_parts.append("No numeric data available for aggregated statistics or performance ranges.")
-
-    summary_parts.append("") # Newline
+    summary_parts.append("")
 
     if 'ROAS_proxy' in df.columns and pd.api.types.is_numeric_dtype(df['ROAS_proxy']):
         display_cols = ['Campaign', 'ROAS_proxy', 'Ad Spend']
@@ -367,6 +353,7 @@ def main():
             if st.button("Load Sample Data & Init Agent"):
                 initial_df_data = load_sample_data(20)
                 st.session_state.initial_df = initial_df_data
+                # Re-initialize agent if gemini_client_instance was None but now might be available
                 st.session_state.campaign_agent = CampaignStrategyAgent(gemini_client_instance, initial_df_data)
                 st.session_state.agent_log = st.session_state.campaign_agent.log
                 st.session_state.data_loaded = True
@@ -377,14 +364,24 @@ def main():
             budget_val = st.session_state.initial_df['Ad Spend'].sum() if 'initial_df' in st.session_state and not st.session_state.initial_df.empty else 50000
             budget_constraint = st.number_input("Overall Budget Constraint (0 for current total):", min_value=0.0, value=st.session_state.get("user_budget", budget_val), step=1000.0)
 
-            if st.button("🚀 Start Agent Analysis & Strategy", type="primary", disabled=(st.session_state.agent_state not in ["idle", "done"] and st.session_state.agent_state is not None) or gemini_client_instance is None):
+            # Disable button if agent is busy OR if gemini client isn't initialized
+            agent_busy = (st.session_state.agent_state not in ["idle", "done"] and st.session_state.agent_state is not None)
+            gemini_unavailable = gemini_client_instance is None
+            button_disabled = agent_busy or gemini_unavailable
+
+            if st.button("🚀 Start Agent Analysis & Strategy", type="primary", disabled=button_disabled):
                 st.session_state.user_goal_desc = goal_desc
                 st.session_state.user_budget = budget_constraint if budget_constraint > 0 else None
                 agent.set_goal(goal_desc, budget=st.session_state.user_budget)
                 with st.spinner("Agent analyzing data..."): agent.analyze_data_and_identify_insights()
-                with st.spinner("Agent developing strategies..."): agent.develop_strategy_options()
+                # Only proceed if analysis was successful (insights generated and not an error message)
+                if st.session_state.analysis_insights and "Gemini client not available" not in str(st.session_state.analysis_insights) and "Error calling Gemini" not in str(st.session_state.analysis_insights):
+                    with st.spinner("Agent developing strategies..."): agent.develop_strategy_options()
+                else:
+                    st.error("Strategy development skipped due to issues in analysis phase.")
                 st.rerun()
-            if gemini_client_instance is None: st.warning("Gemini client not initialized. AI features disabled.")
+
+            if gemini_unavailable: st.warning("Gemini client not initialized. AI features disabled. Please check API key.")
 
         st.subheader("Agent Log")
         if 'agent_log' in st.session_state:
@@ -399,7 +396,6 @@ def main():
         st.info("Please load data or define a goal in the sidebar to begin.")
         return
 
-    # Main area workflow
     if st.session_state.agent_state == "idle" and 'initial_df' in st.session_state:
         st.subheader("Current Campaign Data Preview")
         st.dataframe(st.session_state.initial_df.head())
@@ -412,14 +408,20 @@ def main():
             st.markdown("<p class='agent-thought'>Agent is reviewing data...</p>", unsafe_allow_html=True)
             if 'analysis_summary' in st.session_state:
                 with st.expander("View Raw Data Summary (for agent)", expanded=False): st.text(st.session_state.analysis_summary)
-            if 'analysis_insights' in st.session_state: st.markdown(st.session_state.analysis_insights)
+            if 'analysis_insights' in st.session_state: st.markdown(st.session_state.analysis_insights) # This will show errors from Gemini if any
             else: st.info("Agent is processing data...")
 
     if st.session_state.agent_state == "strategizing":
         st.subheader("💡 Agent Step 2: Strategy Development")
         with st.container(border=True):
             st.markdown("<p class='agent-thought'>Agent is brainstorming strategies...</p>", unsafe_allow_html=True)
-            if 'strategy_options' in st.session_state and st.session_state.strategy_options:
+            # Check if analysis_insights contains an error message
+            analysis_failed = 'analysis_insights' not in st.session_state or \
+                              (st.session_state.analysis_insights and ("Gemini client not available" in str(st.session_state.analysis_insights) or "Error calling Gemini" in str(st.session_state.analysis_insights)))
+
+            if analysis_failed:
+                st.error("Cannot develop strategies as the AI analysis phase encountered an issue. Check agent log and API key.")
+            elif 'strategy_options' in st.session_state and st.session_state.strategy_options:
                 st.write("Agent's proposed strategies. Please select one:")
                 for i, strat in enumerate(st.session_state.strategy_options):
                     with st.expander(f"**Strategy {i+1}: {strat.get('name', 'Unnamed')}**"):
@@ -427,9 +429,8 @@ def main():
                         if st.button(f"Select: {strat.get('name', 'Strategy ' + str(i+1))}", key=f"select_strat_{i}"):
                             with st.spinner("Agent planning execution..."): agent.select_strategy_and_plan_execution(i)
                             st.rerun()
-            elif 'analysis_insights' in st.session_state and "Gemini client not available" in st.session_state.analysis_insights:
-                 st.error("Cannot develop strategies as AI analysis failed due to Gemini client issue.")
-            else: st.info("Agent is formulating strategies...")
+            else: st.info("Agent is formulating strategies or waiting for successful analysis.")
+
 
     if st.session_state.agent_state == "optimizing":
         st.subheader("⚙️ Agent Step 3: Optimization / Simulation Plan")
@@ -449,18 +450,21 @@ def main():
             if 'optimization_results_df' in st.session_state and not st.session_state.optimization_results_df.empty:
                  st.write("#### Optimized Campaign Allocation:")
                  opt_df = st.session_state.optimization_results_df
-                 initial_df_sum = agent.initial_df[['Campaign', 'Ad Spend', 'Historical Reach', 'ROAS_proxy']]
-                 # Ensure columns exist before merging and plotting
-                 cols_to_merge = ['Campaign', 'Optimized Spend', 'Optimized Reach', 'Optimized ROAS_proxy']
-                 if all(c in opt_df.columns for c in cols_to_merge):
-                    comparison_df = initial_df_sum.merge(opt_df[cols_to_merge], on='Campaign', suffixes=('_orig', '_opt'), how='left')
-                    if 'Ad Spend_orig' in comparison_df.columns and 'Optimized Spend' in comparison_df.columns:
-                        fig = go.Figure()
-                        fig.add_trace(go.Bar(name='Original Spend', x=comparison_df['Campaign'], y=comparison_df['Ad Spend_orig']))
-                        fig.add_trace(go.Bar(name='Optimized Spend', x=comparison_df['Campaign'], y=comparison_df['Optimized Spend']))
-                        fig.update_layout(barmode='group', title_text='Original vs. Optimized Spend')
-                        st.plotly_chart(fig, use_container_width=True)
+                 # Defensive plotting: Ensure necessary columns exist
+                 if not agent.initial_df.empty and 'Campaign' in agent.initial_df.columns and \
+                    'Ad Spend' in agent.initial_df.columns and 'Campaign' in opt_df.columns and \
+                    'Optimized Spend' in opt_df.columns:
+                     initial_df_sum = agent.initial_df[['Campaign', 'Ad Spend']].copy()
+                     comparison_df = initial_df_sum.merge(opt_df[['Campaign', 'Optimized Spend']], on='Campaign', suffixes=('_orig', '_opt'), how='left')
+                     fig = go.Figure()
+                     fig.add_trace(go.Bar(name='Original Spend', x=comparison_df['Campaign'], y=comparison_df['Ad Spend_orig']))
+                     fig.add_trace(go.Bar(name='Optimized Spend', x=comparison_df['Campaign'], y=comparison_df['Optimized Spend']))
+                     fig.update_layout(barmode='group', title_text='Original vs. Optimized Spend')
+                     st.plotly_chart(fig, use_container_width=True)
+                 else:
+                     st.warning("Could not generate spend comparison chart due to missing columns.")
                  st.dataframe(st.session_state.optimization_results_df)
+
             if st.session_state.get('final_recommendations'): st.markdown(st.session_state.final_recommendations)
             else:
                 if st.button("Generate Final Report", type="primary"):
@@ -473,10 +477,10 @@ def main():
             st.markdown(st.session_state.get('final_recommendations', "Report generation pending or failed."))
             if st.button("Start New Analysis (Same Data)"):
                 current_df_data = st.session_state.initial_df.copy()
+                # Re-initialize agent, especially if gemini_client_instance might have changed or needs refresh
                 st.session_state.campaign_agent = CampaignStrategyAgent(gemini_client_instance, current_df_data)
                 st.session_state.agent_log = st.session_state.campaign_agent.log
                 st.session_state.agent_state = "idle"
-                # Clear specific states from previous run
                 keys_to_reset = ['analysis_summary', 'analysis_insights', 'strategy_options', 'execution_plan_suggestion', 'optimization_results_df', 'final_recommendations', 'user_goal_desc', 'user_budget', 'view_full_data']
                 for key in keys_to_reset:
                     if key in st.session_state: del st.session_state[key]
