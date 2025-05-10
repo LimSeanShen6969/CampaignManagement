@@ -9,32 +9,37 @@ import time
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objs as go
-from google import genai
+try:
+    from google import generativeai as genai # Updated import
+except ImportError:
+    from google import genai # Fallback for older naming
+
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 from scipy.optimize import linprog
 from scipy import stats
-from statsmodels.stats.power import TTestIndPower
 
-# Page configuration
+
+# --- Page Configuration ---
 st.set_page_config(
-    page_title="Campaign Optimization AI",
-    page_icon="📊",
+    page_title="Agentic Campaign Optimizer",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Enhanced custom CSS
+# --- Enhanced Custom CSS ---
 st.markdown("""
 <style>
+    /* Your existing CSS */
     .main .block-container {
-        padding-top: 2rem;
+        padding-top: 1rem; /* Reduced top padding */
         background-color: #f0f2f6;
     }
     .stTabs [data-baseweb="tab-list"] {
-        gap: 50px; 
+        gap: 20px; /* Adjust as needed */
         margin-bottom: 0.5rem;
         background-color: white;
         border-radius: 10px;
@@ -55,1010 +60,578 @@ st.markdown("""
         border-radius: 10px;
         overflow: hidden;
     }
+    .agent-step {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border-left: 5px solid #1E88E5; /* Accent color */
+    }
+    .agent-thought {
+        font-style: italic;
+        color: #555;
+        margin-bottom: 5px;
+        font-size: 0.9em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Gemini API
+
+# --- Initialize Gemini API ---
 @st.cache_resource
-def initialize_api():
+def initialize_gemini_client():
     try:
-        api_key = st.secrets["gemini_api"]
-        client = genai.Client(api_key=api_key)
-        return client
+        api_key = st.secrets["gemini_api_key"] # Ensure this matches your secrets.toml
+        genai.configure(api_key=api_key)
+        # model = genai.GenerativeModel('gemini-1.5-flash-latest') # Or your preferred model
+        # For older SDK or if you prefer client-based:
+        # client = genai.Client(api_key=api_key)
+        # return client
+        return genai # Return the configured module
     except Exception as e:
-        st.error(f"Failed to initialize API: {e}")
+        st.error(f"Failed to initialize Gemini API: {e}")
+        st.error("Please ensure your Gemini API key is correctly set in st.secrets.")
         return None
 
-client = initialize_api()
+gemini_service = initialize_gemini_client()
+# --- Database Functions (Keep as is or simplify if not heavily used by agent initially) ---
+# init_db, upload_dataset, load_sample_data (can be simplified if agent drives data loading)
 
-# Database functions
-def init_db():
-    """Initialize SQLite database for storing campaign data"""
-    conn = sqlite3.connect('campaign_data.db')
-    c = conn.cursor()
-    
-    # Create tables if they don't exist
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS campaigns (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        date TEXT,
-        historical_reach INTEGER,
-        ad_spend REAL,
-        engagement_rate REAL,
-        competitor_ad_spend REAL,
-        seasonality_factor REAL,
-        repeat_customer_rate REAL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS optimizations (
-        id INTEGER PRIMARY KEY,
-        date TEXT,
-        campaign_id INTEGER,
-        allocated_customers INTEGER,
-        predicted_reach_rate REAL,
-        estimated_reached_customers INTEGER,
-        total_cost REAL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
-    )
-    ''')
-    
-    conn.commit()
-    return conn
+# --- Visualization and Utility Functions (Keep your well-developed functions) ---
+# create_advanced_dashboard, export_data, simulate_scenario, display_scenario_comparison,
+# validate_campaign_query
 
-def upload_dataset():
-    """Allow users to upload their own campaign dataset and store in session state"""
-    st.subheader("Upload Your Campaign Data")
-    
-    # Check if data is already in session state
-    if 'user_data' in st.session_state and st.session_state['user_data'] is not None:
-        st.success(f"Using your previously uploaded dataset with {len(st.session_state['user_data'])} campaigns.")
-        st.button("Upload New Dataset", on_click=lambda: st.session_state.pop('user_data', None))
-        return st.session_state['user_data']
-    
-    uploaded_file = st.file_uploader(
-        "Upload CSV or Excel file", 
-        type=["csv", "xlsx", "xls"]
-    )
-    
-    if uploaded_file is not None:
-        try:
-            # Display a loading message
-            with st.spinner("Processing your dataset..."):
-                # Determine file type and read accordingly
-                if uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                else:
-                    df = pd.read_excel(uploaded_file)
-                
-                # Basic validation
-                required_columns = [
-                    "Campaign", "Historical Reach", "Ad Spend", 
-                    "Engagement Rate", "Competitor Ad Spend", 
-                    "Seasonality Factor", "Repeat Customer Rate"
-                ]
-                
-                missing_columns = [col for col in required_columns if col not in df.columns]
-                
-                if missing_columns:
-                    st.error(f"Missing required columns: {', '.join(missing_columns)}")
-                    st.info("Please ensure your dataset has the following columns: " + 
-                           ", ".join(required_columns))
-                    
-                    # Show sample data format
-                    st.subheader("Sample Data Format")
-                    st.dataframe(load_sample_data(3))
-                    
-                    return None
-                
-                # Calculate additional metrics if they don't exist
-                if 'Campaign Risk' not in df.columns:
-                    df['Campaign Risk'] = (
-                        df['Engagement Rate'].std() / df['Engagement Rate'].mean() * 100
-                    )
-                
-                if 'Efficiency Score' not in df.columns:
-                    df['Efficiency Score'] = (df['Historical Reach'] / df['Ad Spend']) * df['Engagement Rate']
-                
-                if 'Potential Growth' not in df.columns:
-                    df['Potential Growth'] = df['Repeat Customer Rate'] * df['Seasonality Factor']
-                
-                # Store in session state
-                st.session_state['user_data'] = df
-                
-                # Display success message
-                st.success(f"Dataset with {len(df)} campaigns successfully loaded!")
-                
-                # Preview the data
-                st.subheader("Data Preview")
-                st.dataframe(df.head())
-                
-                return df
-        
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-            return None
-    
-    return None
-
-# Enhanced sample data generation
+# --- Core Data Processing & Helper Functions ---
 @st.cache_data(ttl=3600)
-def load_sample_data(num_campaigns=5):
-    """Load sample data for demonstration with added complexity"""
+def load_sample_data(num_campaigns=10): # Increased sample size
     np.random.seed(42)
-    historical_reach = np.random.randint(25000, 50000, num_campaigns)
-    ad_spend = np.random.randint(20000, 50000, num_campaigns)
     data = {
-        "Campaign": [f"Campaign {i+1}" for i in range(num_campaigns)],
-        "Historical Reach": historical_reach,
-        "Ad Spend": ad_spend,
-        "Engagement Rate": np.round(np.random.uniform(0.2, 0.8, num_campaigns), 2),
-        "Competitor Ad Spend": np.random.randint(15000, 45000, num_campaigns),
-        "Seasonality Factor": np.random.choice([0.9, 1.0, 1.1], num_campaigns),
-        "Repeat Customer Rate": np.round(np.random.uniform(0.1, 0.6, num_campaigns), 2),
+        "Campaign": [f"Campaign Alpha {i+1}" if i % 2 == 0 else f"Campaign Beta {i//2+1}" for i in range(num_campaigns)],
+        "Historical Reach": np.random.randint(5000, 150000, num_campaigns),
+        "Ad Spend": np.random.uniform(1000, 30000, num_campaigns),
+        "Engagement Rate": np.round(np.random.uniform(0.005, 0.15, num_campaigns), 4), # More realistic engagement
+        "Conversion Rate": np.round(np.random.uniform(0.001, 0.05, num_campaigns), 4), # Added metric
+        "Average CPC": np.round(np.random.uniform(0.1, 2.5, num_campaigns), 2), # Cost Per Click
+        "Competitor Ad Spend": np.random.uniform(5000, 40000, num_campaigns),
+        "Seasonality Factor": np.random.choice([0.8, 0.9, 1.0, 1.1, 1.2], num_campaigns, p=[0.1,0.2,0.4,0.2,0.1]),
+        "Repeat Customer Rate": np.round(np.random.uniform(0.05, 0.45, num_campaigns), 3),
+        "Target Audience Segment": np.random.choice(["Gen Z", "Millennials", "Gen X", "Broad", "Parents"], num_campaigns)
     }
     df = pd.DataFrame(data)
-    
-    # Add new risk calculation feature
-    df['Campaign Risk'] = (
-        df['Engagement Rate'].std() / df['Engagement Rate'].mean() * 100
-    )
-    
-    # Calculate additional metrics
-    df['Efficiency Score'] = (df['Historical Reach'] / df['Ad Spend']) * df['Engagement Rate']
-    df['Potential Growth'] = df['Repeat Customer Rate'] * df['Seasonality Factor']
-    
+    df['Ad Spend'] = df['Ad Spend'].round(2)
+    df['Competitor Ad Spend'] = df['Competitor Ad Spend'].round(2)
+
+    # Derived Metrics (Crucial for Agent Analysis)
+    df['Cost Per Reach'] = df['Ad Spend'] / df['Historical Reach']
+    df['ROAS_proxy'] = (df['Historical Reach'] * df['Engagement Rate'] * df['Conversion Rate'] * 50) / df['Ad Spend'] # Assuming $50 avg order value
+    df['Engagement_per_Dollar'] = (df['Historical Reach'] * df['Engagement Rate']) / df['Ad Spend']
+    df['Potential Growth Score'] = df['Repeat Customer Rate'] * df['Seasonality Factor'] * (1 - (df['Ad Spend'] / (df['Ad Spend'] + df['Competitor Ad Spend']))) # Market share proxy
+    df.replace([np.inf, -np.inf], np.nan, inplace=True) # Handle potential divisions by zero
+    df.fillna(0, inplace=True) # Fill NaNs that might arise
     return df
 
-# Advanced Visualization Functions
-def create_advanced_dashboard(df):
-    """Create an advanced, interactive dashboard with multiple visualizations"""
-    st.header("Comprehensive Campaign Performance Dashboard")
-    
-    # Tabs for different visualization types
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Multi-Dimensional Analysis", 
-        "Correlation Insights", 
-        "Performance Radar", 
-        "Detailed Campaign Metrics"
-    ])
-    
-    with tab1:
-        # Multi-dimensional scatter plot with interactive features
-        st.subheader("Campaign Performance Landscape")
-        
-        scatter_fig = px.scatter(
-            df, 
-            x="Historical Reach", 
-            y="Engagement Rate",
-            size="Ad Spend",
-            color="Campaign Risk",
-            hover_name="Campaign",
-            title="Campaign Performance Multidimensional View",
-            labels={
-                "Historical Reach": "Historical Reach",
-                "Engagement Rate": "Engagement Rate",
-                "Ad Spend": "Ad Spend Size",
-                "Campaign Risk": "Campaign Risk"
-            },
-            size_max=60
-        )
-        scatter_fig.update_layout(height=600)
-        st.plotly_chart(scatter_fig, use_container_width=True)
-    
-    with tab2:
-        # Correlation Heatmap
-        st.subheader("Campaign Metrics Correlation")
-        
-        corr_columns = [
-            'Historical Reach', 
-            'Ad Spend', 
-            'Engagement Rate', 
-            'Competitor Ad Spend', 
-            'Seasonality Factor', 
-            'Repeat Customer Rate',
-            'Campaign Risk'
-        ]
-        
-        corr_matrix = df[corr_columns].corr()
-        
-        plt.figure(figsize=(10, 8))
-        correlation_fig = sns.heatmap(
-            corr_matrix, 
-            annot=True, 
-            cmap='coolwarm', 
-            linewidths=0.5, 
-            fmt=".2f",
-            square=True,
-            center=0
-        )
-        plt.title("Correlation Between Campaign Metrics")
-        st.pyplot(plt.gcf())
-    
-    with tab3:
-        # Radar Chart for Campaign Comparison
-        st.subheader("Campaign Performance Radar")
-        
-        scaler = StandardScaler()
-        radar_columns = [
-            'Historical Reach', 
-            'Engagement Rate', 
-            'Ad Spend', 
-            'Repeat Customer Rate'
-        ]
-        
-        radar_data = scaler.fit_transform(df[radar_columns])
-        
-        radar_fig = go.Figure()
-        
-        for i, campaign in enumerate(df['Campaign']):
-            radar_fig.add_trace(go.Scatterpolar(
-                r=radar_data[i],
-                theta=radar_columns,
-                fill='toself',
-                name=campaign
-            ))
-        
-        radar_fig.update_layout(
-            polar=dict(
-                radialaxis=dict(
-                    visible=True,
-                    range=[-2, 2]
-                )
-            ),
-            showlegend=True,
-            title="Normalized Campaign Performance Comparison"
-        )
-        
-        st.plotly_chart(radar_fig, use_container_width=True)
-    
-    with tab4:
-        # Detailed Campaign Metrics with Interactive Table
-        st.subheader("Comprehensive Campaign Metrics")
-        
-        styled_df = df.style.highlight_max(
-            subset=['Efficiency Score', 'Potential Growth'], 
-            color='lightgreen'
-        ).format({
-            'Efficiency Score': "{:.4f}",
-            'Potential Growth': "{:.4f}",
-            'Campaign Risk': "{:.2f}%"
-        })
-        
-        st.dataframe(styled_df)
+def get_data_summary(df):
+    if df is None or df.empty:
+        return "No data available for summary."
+    numeric_df = df.select_dtypes(include=np.number)
+    summary = f"""
+    Dataset Overview:
+    - Total Campaigns: {len(df)}
+    - Key Metrics: {', '.join(df.columns)}
 
-# Enhanced Optimization Function
-def optimize_campaign_with_agentic_ai(df, budget, total_customers):
-    """Enhanced campaign optimization with Agentic AI insights"""
-    st.header("Advanced Campaign Optimization")
-    
-    st.subheader("AI Optimization Strategy")
-    
-    # Calculate optimization metrics
-    df['Optimization Potential'] = (
-        df['Historical Reach'] / df['Ad Spend'] * 
-        df['Engagement Rate'] * 
-        df['Seasonality Factor']
-    )
-    
-    # Sort campaigns by optimization potential
-    optimized_campaigns = df.sort_values('Optimization Potential', ascending=False)
-    
-    # Simulate budget allocation
-    total_optimization_potential = optimized_campaigns['Optimization Potential'].sum()
-    optimized_campaigns['Allocated Budget'] = (
-        optimized_campaigns['Optimization Potential'] / total_optimization_potential * budget
-    )
-    
-    # Estimated reach calculation
-    optimized_campaigns['Estimated Reach'] = (
-        optimized_campaigns['Allocated Budget'] / 
-        optimized_campaigns['Ad Spend'] * 
-        optimized_campaigns['Historical Reach']
-    )
-    
-    # Visualization of optimization results
-    fig = px.bar(
-        optimized_campaigns, 
-        x='Campaign', 
-        y='Allocated Budget', 
-        color='Estimated Reach',
-        title='AI-Optimized Budget Allocation',
-        labels={'Allocated Budget': 'Budget Allocation', 'Estimated Reach': 'Potential Reach'}
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Detailed optimization results
-    st.subheader("Optimization Breakdown")
-    optimization_results = optimized_campaigns[[
-        'Campaign', 
-        'Allocated Budget', 
-        'Estimated Reach', 
-        'Optimization Potential'
-    ]].style.format({
-        'Allocated Budget': "${:,.2f}",
-        'Estimated Reach': "{:,.0f}",
-        'Optimization Potential': "{:.4f}"
-    })
-    
-    st.dataframe(optimization_results)
-    
-    # AI Insights
-    st.subheader("AI Strategic Recommendations")
-    recommendations = [
-        f"🎯 Prioritize {optimized_campaigns.iloc[0]['Campaign']} with highest optimization potential",
-        f"💡 Potential budget reallocation could increase overall reach by {optimized_campaigns['Estimated Reach'].sum() / df['Historical Reach'].sum():.2%}",
-        "🔍 Consider adjusting strategies for lower-performing campaigns",
-        f"📊 Top 2 campaigns ({', '.join(optimized_campaigns.head(2)['Campaign'])}) show most promise"
-    ]
-    
-    for rec in recommendations:
-        st.markdown(rec)
+    Aggregated Statistics:
+    - Total Historical Reach: {numeric_df['Historical Reach'].sum():,.0f}
+    - Total Ad Spend: ${numeric_df['Ad Spend'].sum():,.2f}
+    - Average Engagement Rate: {numeric_df['Engagement Rate'].mean():.2%}
+    - Average Conversion Rate: {numeric_df['Conversion Rate'].mean():.2%}
+    - Average ROAS (Proxy): {numeric_df['ROAS_proxy'].mean():.2f}
+    - Overall Cost Per Reach: ${(numeric_df['Ad Spend'].sum() / numeric_df['Historical Reach'].sum()) if numeric_df['Historical Reach'].sum() > 0 else 0:.2f}
 
-# Export and additional utility functions
-def export_data(df, filename, export_type='csv'):
-    """Export campaign data to CSV or Excel"""
-    if export_type == 'csv':
-        df.to_csv(f"{filename}.csv", index=False)
-        st.success(f"Data exported to {filename}.csv")
-    elif export_type == 'excel':
-        df.to_excel(f"{filename}.xlsx", index=False)
-        st.success(f"Data exported to {filename}.xlsx")
-
-# Existing optimization function
-def optimize_allocation(df, MAX_CUSTOMERS_PER_CAMPAIGN, EXPECTED_REACH_RATE, COST_PER_CUSTOMER, BUDGET_CONSTRAINTS, TOTAL_CUSTOMERS):
-    # [Previous implementation remains unchanged]
-    pass
-
-def simulate_scenario(df, scenario_type, parameters):
+    Performance Ranges:
+    - Engagement Rate: {numeric_df['Engagement Rate'].min():.2%} - {numeric_df['Engagement Rate'].max():.2%}
+    - Ad Spend per Campaign: ${numeric_df['Ad Spend'].min():,.0f} - ${numeric_df['Ad Spend'].max():,.0f}
+    - ROAS (Proxy) per Campaign: {numeric_df['ROAS_proxy'].min():.2f} - {numeric_df['ROAS_proxy'].max():.2f}
     """
-    Simulate different marketing scenarios based on the selected type and parameters
-    
-    Args:
-        df: Original campaign dataframe
-        scenario_type: Type of scenario to simulate
-        parameters: Dictionary of scenario-specific parameters
-    
-    Returns:
-        Modified dataframe based on scenario
-    """
-    # Create a copy of the dataframe to avoid modifying the original
-    scenario_df = df.copy()
-    
-    if scenario_type == "Budget Variation":
-        # Apply budget adjustment factor to ad spend
-        budget_factor = parameters.get('budget_factor', 1.0)
-        scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * budget_factor
-        
-        # Estimate new reach based on adjusted spend
-        # Using a logarithmic relationship between spend and reach
-        scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * (
-            1 + np.log1p(budget_factor - 1) * parameters.get('elasticity', 0.7)
-        )
-        
-        # Adjust engagement based on diminishing returns
-        if budget_factor > 1:
-            # Slight decrease in engagement with higher spend (saturation)
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * (
-                1 - (budget_factor - 1) * 0.1
-            )
-        else:
-            # Slight increase in engagement with lower spend (targeting)
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * (
-                1 + (1 - budget_factor) * 0.05
-            )
-            
-    elif scenario_type == "Target Audience Change":
-        # Apply audience targeting adjustments
-        audience_focus = parameters.get('audience_focus', 'Broad')
-        
-        if audience_focus == 'Narrow':
-            # Higher engagement but lower reach
-            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 0.7
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.4
-            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 0.9
-        elif audience_focus == 'Balanced':
-            # Moderate adjustments
-            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 0.9
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.2
-            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.0
-        else:  # Broad
-            # Higher reach but lower engagement
-            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 1.3
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 0.8
-            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.1
-    
-    elif scenario_type == "Seasonal Impact":
-        # Apply seasonal factors
-        season = parameters.get('season', 'Normal')
-        
-        if season == 'Peak':
-            # High season - better performance but more expensive
-            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 1.25
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.15
-            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.2
-        elif season == 'Low':
-            # Off season - cheaper but lower performance
-            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 0.8
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 0.9
-            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 0.85
-        else:  # Normal
-            # Standard season
-            scenario_df['Estimated Reach'] = scenario_df['Historical Reach'] * 1.0
-            scenario_df['Adjusted Engagement'] = scenario_df['Engagement Rate'] * 1.0
-            scenario_df['Adjusted Ad Spend'] = scenario_df['Ad Spend'] * 1.0
-    
-    # Calculate adjusted metrics for all scenarios
-    scenario_df['ROI'] = (scenario_df['Estimated Reach'] * scenario_df['Adjusted Engagement']) / scenario_df['Adjusted Ad Spend']
-    scenario_df['Efficiency Score'] = (scenario_df['Estimated Reach'] / scenario_df['Adjusted Ad Spend']) * scenario_df['Adjusted Engagement']
-    
-    return scenario_df
+    # Top/Bottom Performers (example for ROAS)
+    if 'ROAS_proxy' in numeric_df.columns:
+        top_roas = numeric_df.nlargest(3, 'ROAS_proxy')[['Campaign', 'ROAS_proxy', 'Ad Spend']]
+        bottom_roas = numeric_df.nsmallest(3, 'ROAS_proxy')[['Campaign', 'ROAS_proxy', 'Ad Spend']]
+        summary += f"\nTop 3 Campaigns by ROAS (Proxy):\n{top_roas.to_string(index=False)}"
+        summary += f"\nBottom 3 Campaigns by ROAS (Proxy):\n{bottom_roas.to_string(index=False)}\n"
+    return summary
 
-def display_scenario_comparison(original_df, scenario_df, scenario_type, parameters):
-    """Display comparison between original data and scenario simulation"""
-    st.subheader(f"Scenario Analysis: {scenario_type}")
-    
-    # Display scenario parameters
-    st.write("Scenario Parameters:")
-    for param, value in parameters.items():
-        st.write(f"- **{param.replace('_', ' ').title()}**: {value}")
-    
-    # Key metrics comparison
-    original_total_reach = original_df['Historical Reach'].sum()
-    scenario_total_reach = scenario_df['Estimated Reach'].sum()
-    
-    original_total_spend = original_df['Ad Spend'].sum()
-    scenario_total_spend = scenario_df['Adjusted Ad Spend'].sum()
-    
-    # Create metrics display
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            "Total Reach", 
-            f"{scenario_total_reach:,.0f}",
-            f"{(scenario_total_reach - original_total_reach) / original_total_reach:.1%}"
-        )
-    
-    with col2:
-        st.metric(
-            "Total Ad Spend", 
-            f"${scenario_total_spend:,.2f}",
-            f"{(scenario_total_spend - original_total_spend) / original_total_spend:.1%}"
-        )
-    
-    with col3:
-        original_efficiency = original_total_reach / original_total_spend
-        scenario_efficiency = scenario_total_reach / scenario_total_spend
-        
-        st.metric(
-            "Reach Efficiency", 
-            f"{scenario_efficiency:.2f} per $",
-            f"{(scenario_efficiency - original_efficiency) / original_efficiency:.1%}"
-        )
-    
-    # Visual comparison
-    st.subheader("Campaign Performance Comparison")
-    
-    # Prepare comparison data
-    comparison_data = pd.DataFrame({
-        'Campaign': original_df['Campaign'],
-        'Original Reach': original_df['Historical Reach'],
-        'Scenario Reach': scenario_df['Estimated Reach'],
-        'Original Spend': original_df['Ad Spend'],
-        'Scenario Spend': scenario_df['Adjusted Ad Spend'],
-    })
-    
-    # Create reach comparison chart
-    reach_fig = px.bar(
-        comparison_data,
-        x='Campaign',
-        y=['Original Reach', 'Scenario Reach'],
-        barmode='group',
-        title='Reach Comparison by Campaign',
-        labels={'value': 'Reach', 'variable': 'Scenario'}
-    )
-    st.plotly_chart(reach_fig, use_container_width=True)
-    
-    # Create spend comparison chart
-    spend_fig = px.bar(
-        comparison_data,
-        x='Campaign',
-        y=['Original Spend', 'Scenario Spend'],
-        barmode='group',
-        title='Spend Comparison by Campaign',
-        labels={'value': 'Ad Spend ($)', 'variable': 'Scenario'}
-    )
-    st.plotly_chart(spend_fig, use_container_width=True)
-    
-    # Display detailed comparison table
-    st.subheader("Detailed Metrics Comparison")
-    
-    detailed_comparison = pd.DataFrame({
-        'Campaign': original_df['Campaign'],
-        'Original Reach': original_df['Historical Reach'],
-        'Scenario Reach': scenario_df['Estimated Reach'],
-        'Reach Δ%': (scenario_df['Estimated Reach'] - original_df['Historical Reach']) / original_df['Historical Reach'] * 100,
-        'Original Spend': original_df['Ad Spend'],
-        'Scenario Spend': scenario_df['Adjusted Ad Spend'],
-        'Spend Δ%': (scenario_df['Adjusted Ad Spend'] - original_df['Ad Spend']) / original_df['Ad Spend'] * 100,
-        'Original Engagement': original_df['Engagement Rate'],
-        'Scenario Engagement': scenario_df['Adjusted Engagement'],
-        'Engagement Δ%': (scenario_df['Adjusted Engagement'] - original_df['Engagement Rate']) / original_df['Engagement Rate'] * 100
-    })
-    
-    # Format the table
-    styled_comparison = detailed_comparison.style.format({
-        'Original Reach': '{:,.0f}',
-        'Scenario Reach': '{:,.0f}',
-        'Reach Δ%': '{:.1f}%',
-        'Original Spend': '${:,.2f}',
-        'Scenario Spend': '${:,.2f}',
-        'Spend Δ%': '{:.1f}%',
-        'Original Engagement': '{:.2f}',
-        'Scenario Engagement': '{:.2f}',
-        'Engagement Δ%': '{:.1f}%'
-    }).background_gradient(
-        subset=['Reach Δ%', 'Engagement Δ%'], 
-        cmap='RdYlGn'
-    )
-    
-    st.dataframe(styled_comparison)
-    
-    # AI-generated insights
-    st.subheader("Scenario Insights")
-    
-    insights = []
-    
-    # Generate insights based on scenario results
-    if scenario_total_reach > original_total_reach and scenario_total_spend <= original_total_spend:
-        insights.append("✅ This scenario achieves higher reach with the same or lower budget")
-    elif scenario_total_reach > original_total_reach and scenario_total_spend > original_total_spend:
-        if (scenario_total_reach / original_total_reach) > (scenario_total_spend / original_total_spend):
-            insights.append("✅ This scenario is more efficient despite higher costs")
-        else:
-            insights.append("⚠️ This scenario increases reach but at a disproportionately higher cost")
-    elif scenario_total_reach < original_total_reach and scenario_total_spend < original_total_spend:
-        if (scenario_total_reach / original_total_reach) > (scenario_total_spend / original_total_spend):
-            insights.append("✅ This scenario saves budget while maintaining relative efficiency")
-        else:
-            insights.append("⚠️ This scenario reduces costs but significantly impacts campaign performance")
-    
-    # Campaign-specific insights
-    best_campaign = comparison_data.loc[
-        comparison_data['Reach Δ%'].idxmax() if 'Reach Δ%' in comparison_data.columns 
-        else comparison_data.index[0]
-    ]
-    
-    insights.append(f"🔍 {best_campaign['Campaign']} shows the most improvement in this scenario")
-    
-    for insight in insights:
-        st.markdown(insight)
-    
-    # Recommendation based on scenario
-    st.subheader("Recommendation")
-    
-    if scenario_efficiency > original_efficiency * 1.1:
-        st.success("This scenario shows significant improvements and is recommended for implementation")
-    elif scenario_efficiency > original_efficiency:
-        st.info("This scenario shows moderate improvements and could be considered with careful monitoring")
-    else:
-        st.warning("This scenario does not improve overall efficiency compared to the current approach")
+# --- Agent Class ---
+class CampaignStrategyAgent:
+    def __init__(self, gemini_service, initial_df):
+        self.gemini = gemini_service
+        self.initial_df = initial_df.copy()
+        self.current_df = initial_df.copy()
+        self.log = ["Agent initialized."]
+        self.current_goal = None
+        self.strategy_options = []
+        self.chosen_strategy_details = None
+        self.optimization_results = None
+        self.simulation_results = None
+        self.recommendations = ""
 
-def validate_campaign_query(query):
-    """
-    Validate if the query is related to campaign optimization
-    
-    Uses a pattern-based approach to determine campaign relevance
-    """
-    import re
-    
-    # Convert query to lowercase
-    lower_query = query.lower()
-    
-    # Check if the query is too short or generic
-    if len(lower_query.strip()) < 10:
-        return False, "Please provide a more detailed question about campaign optimization."
-    
-    # Regex patterns for campaign-related queries
-    campaign_patterns = [
-        r'\b(campaign|marketing|ad|advertis(ing|e))\b',
-        r'\b(optimize|improve|strategy|reach|engagement)\b',
-        r'\b(budget|spend|performance|target(ing)?)\b',
-        r'\b(customer|audience|conversion)\b'
-    ]
-    
-    # Check if any campaign-related pattern matches
-    if any(re.search(pattern, lower_query) for pattern in campaign_patterns):
-        return True, ""
-    
-    # Specific blocking for non-campaign topics
-    non_campaign_patterns = [
-        r'\b(news|current\s*events|politics|celebrity|personal)\b',
-        r'\b(trump|biden|president|world\s*leader)\b',
-        r'\b(sports|entertainment|gossip)\b'
-    ]
-    
-    # Block queries matching non-campaign patterns
-    if any(re.search(pattern, lower_query) for pattern in non_campaign_patterns):
-        return False, "I am designed to provide insights specifically for campaign optimization. Please ask a question related to marketing campaigns, strategy, or performance."
-    
-    # Generic fallback for queries that don't match campaign patterns
-    return False, "Please ask a specific question about campaign optimization. For example: 'How can I improve my campaign engagement?' or 'What strategies can increase marketing reach?'"
+        if 'agent_state' not in st.session_state:
+            st.session_state.agent_state = "idle" # idle, analyzing, strategizing, optimizing, simulating, reporting
 
-def ai_insights_section(df):
-    """
-    Enhanced AI Insights section with dataset upload and context-aware insights
-    """
-    st.header("Campaign Strategies Recommendation Powered By Gemini")
-    
-    # Dataset context display
-    st.subheader("Current Dataset Overview")
-    
-    # Display basic dataset statistics
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Total Campaigns", len(df))
-    
-    with col2:
-        st.metric("Avg Engagement Rate", f"{df['Engagement Rate'].mean():.2%}")
-    
-    with col3:
-        st.metric("Total Ad Spend", f"${df['Ad Spend'].sum():,.0f}")
-    
-    # Dataset details with expandable section
-    with st.expander("Dataset Details"):
-        st.write("### Campaign Metrics Summary")
-        
-        # Modified summary statistics calculation
-        summary_stats_dict = {
-            'Historical Reach': ['mean', 'min', 'max'],
-            'Ad Spend': ['mean', 'min', 'max'],
-            'Engagement Rate': ['mean', 'median'],
-            'Competitor Ad Spend': ['mean'],
-            'Repeat Customer Rate': ['mean']
+    def _add_log(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log.append(f"[{timestamp}] {message}")
+        st.session_state.agent_log = self.log # Update session state for display
+
+    @st.cache_data(show_spinner=False) # Cache LLM calls for same input
+    def _call_gemini(_self, prompt, safety_settings=None): # _self to avoid conflict with self in instance method
+        if not _self.gemini:
+            return "Gemini service not available."
+        try:
+            # For the module-level configuration:
+            model = _self.gemini.GenerativeModel('gemini-1.5-flash-latest') # or another preferred model
+            response = model.generate_content(prompt, safety_settings=safety_settings)
+            # Accessing text:
+            # For candidate-based response (common):
+            if response.candidates:
+                return response.candidates[0].content.parts[0].text
+            # For direct text response (less common for generate_content):
+            elif hasattr(response, 'text'):
+                return response.text
+            else: # Fallback if structure is different
+                return "Could not extract text from Gemini response."
+
+        except Exception as e:
+            return f"Error calling Gemini: {str(e)}"
+
+    def set_goal(self, goal_description, budget=None, target_metric_improvement=None):
+        self.current_goal = {
+            "description": goal_description,
+            "budget": budget,
+            "target_metric_improvement": target_metric_improvement # e.g. {"metric": "ROAS", "percentage": 10}
         }
-        
-        # Dynamically create summary based on available columns
-        summary_data = {}
-        for col, agg_funcs in summary_stats_dict.items():
-            if col in df.columns:
-                summary_data[col] = df[col].agg(agg_funcs)
-        
-        # Convert to DataFrame
-        summary_stats = pd.DataFrame(summary_data).T
-        
-        # Rename columns to be consistent
-        if len(summary_stats.columns) == 3:
-            summary_stats.columns = ['Mean', 'Min', 'Max']
-        elif len(summary_stats.columns) == 2:
-            summary_stats.columns = ['Mean', 'Median']
-        
-        # Format numeric columns
-        summary_stats = summary_stats.apply(lambda x: x.apply(lambda val: f'{val:.4f}'))
-        
-        st.dataframe(summary_stats)
-    
-    # AI Query Section
-    st.subheader("Ask AI About Your Campaigns")
-    
-    # Preset context options
-    context_options = [
-        "General Strategy Recommendations",
-        "Budget Optimization",
-        "Audience Targeting",
-        "Engagement Improvement",
-        "Competitive Analysis"
-    ]
-    
-    # Context selection columns
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        user_query = st.text_input(
-            "Specific Campaign Strategy Question:",
-            placeholder="What strategies can improve my campaign performance?"
-        )
-    
-    with col2:
-        context_focus = st.selectbox(
-            "Query Context", 
-            context_options,
-            index=0
-        )
-    
-    # Gemini AI Integration
-    if st.button("Generate Strategic Insights"):
-        # Validate the query first
-        is_valid, error_message = validate_campaign_query(user_query)
-        
-        if not is_valid:
-            st.warning(error_message)
-        elif client:
-            try:
-                with st.spinner("Analyzing campaign data..."):
-                    # Prepare comprehensive data context
-                    data_context = f"""
-                    Campaign Dataset Overview:
-                    - Total Campaigns: {len(df)}
-                    - Metrics: {', '.join(df.columns)}
-                    
-                    Key Statistics:
-                    - Average Engagement Rate: {df['Engagement Rate'].mean():.2f}
-                    - Total Ad Spend: ${df['Ad Spend'].sum():,.2f}
-                    - Average Historical Reach: {df['Historical Reach'].mean():,.0f}
-                    - Repeat Customer Rate: {df['Repeat Customer Rate'].mean():.2f}
-                    
-                    Top Performing Campaigns:
-                    {df.nlargest(3, 'Engagement Rate')[['Campaign', 'Engagement Rate', 'Ad Spend']].to_string()}
-                    
-                    Campaign Performance Distribution:
-                    - Engagement Rate Range: {df['Engagement Rate'].min():.2f} - {df['Engagement Rate'].max():.2f}
-                    - Ad Spend Range: ${df['Ad Spend'].min():,.0f} - ${df['Ad Spend'].max():,.0f}
-                    
-                    Specific Context: {context_focus}
-                    
-                    Specific User Query: {user_query}
-                    
-                    Request:
-                    1. Provide data-driven marketing strategy insights
-                    2. Focus on actionable recommendations
-                    3. Explain reasoning using the provided campaign metrics
-                    4. Tailor advice to the specified context: {context_focus}
-                    """
-                    
-                    # Generate AI response
-                    response = client.models.generate_content(
-                        model="gemini-2.0-flash",
-                        contents=data_context
-                    )
-                    
-                    # Display AI insights
-                    st.markdown("### 🧠 AI Strategic Insights")
-                    st.write(response.text)
-                    
-                    # Optional: Highlight key takeaways
-                    st.subheader("Key Recommendations")
-                    key_points = response.text.split('\n')[:5]  # First 5 lines as key points
-                    for point in key_points:
-                        if point.strip():  # Skip empty lines
-                            st.markdown(f"- {point}")
-            
-            except Exception as e:
-                st.error(f"AI Insight Generation Error: {e}")
-                st.write("Fallback Insights:")
-                st.write("- Review campaigns with high engagement rates")
-                st.write("- Consider reallocating budget from low-performing campaigns")
+        self._add_log(f"Goal set: {goal_description}")
+        st.session_state.agent_state = "analyzing"
+
+    def analyze_data_and_identify_insights(self):
+        if self.current_df is None or self.current_df.empty:
+            self._add_log("Error: No data to analyze.")
+            return "No data available."
+        self._add_log("Starting data analysis...")
+        st.session_state.agent_state = "analyzing"
+
+        data_summary = get_data_summary(self.current_df)
+        self._add_log("Data summary generated.")
+
+        prompt = f"""
+        You are a Senior Marketing Analyst AI. Your task is to analyze the provided campaign data summary and identify key insights, opportunities, and potential risks relevant to the user's goal.
+
+        User's Goal: {self.current_goal['description']}
+        {f"Budget Constraint: ${self.current_goal['budget']}" if self.current_goal.get('budget') else ""}
+        {f"Target Improvement: Increase {self.current_goal['target_metric_improvement']['metric']} by {self.current_goal['target_metric_improvement']['percentage']}%" if self.current_goal.get('target_metric_improvement') else ""}
+
+        Data Summary:
+        {data_summary}
+
+        Based on this, provide:
+        1.  Key Observations (3-5 bullet points highlighting critical patterns, strengths, or weaknesses in the data relevant to the goal).
+        2.  Potential Opportunities (2-3 actionable opportunities to achieve the goal, e.g., "High ROAS campaigns X, Y could receive more budget if overall ROAS is the goal").
+        3.  Potential Risks/Challenges (1-2 risks to consider, e.g., "Campaign Z has high spend but low ROAS, needs review").
+        Be concise and data-driven.
+        """
+        self._add_log("Querying LLM for initial insights...")
+        insights = self._call_gemini(prompt)
+        self._add_log("Initial insights received from LLM.")
+        st.session_state.analysis_summary = data_summary
+        st.session_state.analysis_insights = insights
+        st.session_state.agent_state = "strategizing"
+        return {"summary": data_summary, "insights": insights}
+
+    def develop_strategy_options(self):
+        if 'analysis_insights' not in st.session_state:
+            self._add_log("Error: Analysis must be run before developing strategies.")
+            return []
+        self._add_log("Developing strategy options...")
+        st.session_state.agent_state = "strategizing"
+
+        prompt = f"""
+        You are a Chief Marketing Strategist AI. Based on the user's goal and the initial data analysis insights, propose 2-3 distinct, actionable marketing strategies.
+        For each strategy, provide:
+        -   Strategy Name (e.g., "Aggressive Growth Focus", "Efficiency Optimization", "Diversified Portfolio Balancing")
+        -   Brief Description (1-2 sentences)
+        -   Key Actions (2-3 bullet points of specific actions, e.g., "Reallocate X% budget from low-performing campaigns to top performers", "A/B test new ad creatives for campaign Y", "Reduce spend on campaigns with Cost Per Reach above $Z")
+        -   Pros (1-2)
+        -   Cons/Risks (1-2)
+        -   Primary Metric to Track for this strategy.
+
+        User's Goal: {self.current_goal['description']}
+        Analysis Insights:
+        {st.session_state.analysis_insights}
+        Data Summary Context:
+        {st.session_state.analysis_summary}
+
+        Focus on strategies that can be implemented or simulated using typical campaign metrics (Reach, Spend, Engagement, Conversions, ROAS, CPC).
+        Output should be easily parsable, perhaps using Markdown for structure for each strategy.
+        Example for one strategy:
+        --- STRATEGY START ---
+        Strategy Name: Example Strategy
+        Description: This is an example.
+        Key Actions:
+        * Action 1
+        * Action 2
+        Pros:
+        * Pro 1
+        Cons/Risks:
+        * Con 1
+        Primary Metric: ROAS
+        --- STRATEGY END ---
+        """
+        self._add_log("Querying LLM for strategy options...")
+        raw_strategies = self._call_gemini(prompt)
+        self._add_log("Strategy options received from LLM.")
+
+        # Basic parsing (can be made more robust)
+        self.strategy_options = []
+        if raw_strategies and "--- STRATEGY START ---" in raw_strategies:
+            options = raw_strategies.split("--- STRATEGY START ---")[1:]
+            for opt_text in options:
+                opt_text = opt_text.replace("--- STRATEGY END ---", "").strip()
+                lines = opt_text.split('\n')
+                strategy_dict = {"full_text": opt_text}
+                for line in lines:
+                    if "Strategy Name:" in line: strategy_dict["name"] = line.split(":",1)[1].strip()
+                    if "Description:" in line: strategy_dict["description"] = line.split(":",1)[1].strip()
+                    # Further parsing for Key Actions, Pros, Cons, Metric can be added
+                if "name" in strategy_dict: # Ensure a name was parsed
+                     self.strategy_options.append(strategy_dict)
+        else: # Fallback if parsing fails
+             self.strategy_options.append({"name": "LLM Fallback Strategy", "description": raw_strategies, "full_text": raw_strategies})
+
+        st.session_state.strategy_options = self.strategy_options
+        return self.strategy_options
+
+
+    def select_strategy_and_plan_execution(self, chosen_strategy_index):
+        if not self.strategy_options or chosen_strategy_index >= len(self.strategy_options):
+            self._add_log("Error: Invalid strategy selection.")
+            return
+        self.chosen_strategy_details = self.strategy_options[chosen_strategy_index]
+        self._add_log(f"Strategy selected: {self.chosen_strategy_details.get('name', 'N/A')}")
+        st.session_state.agent_state = "optimizing" # Or "simulating" depending on strategy
+
+        # Here, the agent would use the LLM again to translate the chosen strategy
+        # into concrete parameters for optimization or simulation.
+        # For now, we'll make this step simpler.
+        prompt = f"""
+        You are an AI Operations Planner. The user has selected the following marketing strategy:
+        Strategy Name: {self.chosen_strategy_details.get('name')}
+        Description: {self.chosen_strategy_details.get('description')}
+        Full Details: {self.chosen_strategy_details.get('full_text')}
+
+        User's Goal: {self.current_goal['description']}
+        Data Summary:
+        {st.session_state.analysis_summary}
+
+        Based on this, outline a brief plan for what to do next.
+        Consider if this strategy primarily involves:
+        A) Budget Reallocation/Optimization: If so, what are the key criteria (e.g., maximize ROAS, maximize Reach within budget)?
+        B) Scenario Simulation: If so, what parameters should be changed for the simulation (e.g., increase budget for top campaigns, test different seasonality factors)?
+        C) Content/Creative Changes (harder to automate here, but note it).
+
+        Suggest the next logical step (e.g., "Run budget optimization focusing on ROAS", "Simulate a 20% budget increase for high-potential campaigns").
+        """
+        self._add_log("Querying LLM for execution plan...")
+        execution_plan_suggestion = self._call_gemini(prompt)
+        self._add_log(f"Execution plan suggestion: {execution_plan_suggestion}")
+        st.session_state.execution_plan_suggestion = execution_plan_suggestion
+        # This plan would then guide which tool (optimizer, simulator) to call next.
+        # For simplicity in this example, we'll assume most strategies lead to budget optimization.
+
+    def execute_optimization_or_simulation(self, budget_for_optimization=None):
+        self._add_log("Executing optimization/simulation...")
+        st.session_state.agent_state = "optimizing" # or "simulating"
+
+        # This is a simplified version. A real agent would look at `st.session_state.execution_plan_suggestion`
+        # and decide whether to run optimization, simulation, or something else.
+        # It would also parse parameters for these tools from the LLM's suggestion.
+
+        # Placeholder: Assume budget optimization is the common path
+        if budget_for_optimization is None:
+            budget_for_optimization = self.current_goal.get('budget', self.current_df['Ad Spend'].sum() * 1.0) # Default to current total spend
+
+        df_to_optimize = self.current_df.copy()
+
+        # Using a simplified optimization logic (enhance with linprog or your existing optimizer)
+        # Example: Reallocate based on ROAS_proxy, respecting the total budget
+        if 'ROAS_proxy' not in df_to_optimize.columns or df_to_optimize['ROAS_proxy'].sum() == 0:
+            self._add_log("Warning: ROAS_proxy not available or all zero. Using simple equal allocation.")
+            df_to_optimize['Optimized Spend'] = budget_for_optimization / len(df_to_optimize)
         else:
-            st.error("AI integration currently unavailable")
+            # Normalize ROAS to use as weights for budget allocation
+            # Add a small constant to avoid division by zero or issues with negative ROAS if not handled
+            min_roas = df_to_optimize['ROAS_proxy'].min()
+            roas_adjusted = df_to_optimize['ROAS_proxy'] + abs(min_roas) + 0.001 if min_roas <=0 else df_to_optimize['ROAS_proxy']
             
+            total_roas_weight = roas_adjusted.sum()
+            if total_roas_weight > 0:
+                 df_to_optimize['Budget Weight'] = roas_adjusted / total_roas_weight
+                 df_to_optimize['Optimized Spend'] = df_to_optimize['Budget Weight'] * budget_for_optimization
+            else: # Fallback if all adjusted ROAS are zero
+                self._add_log("Warning: All ROAS weights are zero. Using simple equal allocation.")
+                df_to_optimize['Optimized Spend'] = budget_for_optimization / len(df_to_optimize)
+
+
+        # Estimate new reach based on new spend (simple linear scaling, can be improved)
+        # Avoid division by zero if original Ad Spend is 0
+        df_to_optimize['Spend Ratio'] = df_to_optimize.apply(
+            lambda row: row['Optimized Spend'] / row['Ad Spend'] if row['Ad Spend'] > 0 else 1, axis=1
+        )
+        df_to_optimize['Optimized Reach'] = (df_to_optimize['Historical Reach'] * df_to_optimize['Spend Ratio']).round(0)
+        df_to_optimize['Optimized ROAS_proxy'] = (df_to_optimize['Optimized Reach'] * df_to_optimize['Engagement Rate'] * df_to_optimize['Conversion Rate'] * 50) / df_to_optimize['Optimized Spend']
+        df_to_optimize.replace([np.inf, -np.inf], np.nan, inplace=True)
+        df_to_optimize.fillna(0, inplace=True)
+
+        self.optimization_results = df_to_optimize[['Campaign', 'Ad Spend', 'Optimized Spend', 'Historical Reach', 'Optimized Reach', 'ROAS_proxy', 'Optimized ROAS_proxy']]
+        self._add_log("Optimization complete.")
+        st.session_state.optimization_results_df = self.optimization_results
+        st.session_state.agent_state = "reporting"
+        return self.optimization_results
+
+    def generate_final_report_and_recommendations(self):
+        self._add_log("Generating final report and recommendations...")
+        st.session_state.agent_state = "reporting"
+
+        report_context = f"""
+        User's Goal: {self.current_goal['description']}
+        Initial Data Analysis Insights:
+        {st.session_state.get('analysis_insights', 'N/A')}
+
+        Chosen Strategy: {self.chosen_strategy_details.get('name', 'N/A') if self.chosen_strategy_details else 'N/A'}
+        Strategy Details: {self.chosen_strategy_details.get('full_text', 'N/A') if self.chosen_strategy_details else 'N/A'}
+
+        Optimization/Simulation Results Overview:
+        Original Total Spend: ${self.initial_df['Ad Spend'].sum():,.2f}
+        Optimized Total Spend: ${self.optimization_results['Optimized Spend'].sum():,.2f}
+        Original Total Reach: {self.initial_df['Historical Reach'].sum():,.0f}
+        Optimized Total Reach: {self.optimization_results['Optimized Reach'].sum():,.0f}
+        Original Avg ROAS_proxy: {self.initial_df['ROAS_proxy'].mean():.2f}
+        Optimized Avg ROAS_proxy: {self.optimization_results['Optimized ROAS_proxy'].mean():.2f}
+
+        Detailed Optimization Results (Top 5 by Optimized Spend):
+        {self.optimization_results.nlargest(5, 'Optimized Spend').to_string(index=False) if self.optimization_results is not None else 'N/A'}
+
+        Based on all the above, provide a concise final report:
+        1.  Summary of Actions Taken by the AI agent.
+        2.  Key Outcomes of the chosen strategy and optimization (compare vs. original).
+        3.  Actionable Recommendations (3-5 bullet points for the user to consider next).
+        4.  Potential Next Steps for further analysis or refinement.
+        """
+        self._add_log("Querying LLM for final report...")
+        self.recommendations = self._call_gemini(report_context)
+        self._add_log("Final report generated.")
+        st.session_state.final_recommendations = self.recommendations
+        st.session_state.agent_state = "done"
+        return self.recommendations
+
+# --- Streamlit UI ---
 def main():
-    st.title("Campaign Optimization AI 🚀")
-    
-    # Initialize session state for data persistence if not already done
-    if 'data_source' not in st.session_state:
-        st.session_state['data_source'] = "Use Sample Data"
-    
-    # Initialize database
-    conn = init_db()
-    
-    # Sidebar for navigation
-    page = st.sidebar.selectbox(
-        "Select Analysis Mode",
-        [
-            "Campaign Dashboard 📊", 
-            "Optimization Engine 🎯", 
-            "AI Insights 🤖", 
-            "Scenario Comparison 📈"
-        ]
-    )
-    
-    # Data source selection with session state
-    data_source = st.sidebar.radio(
-        "Select Data Source",
-        ["Use Sample Data", "Upload Your Own Data"],
-        index=0 if st.session_state['data_source'] == "Use Sample Data" else 1,
-        key="data_source_radio"
-    )
-    
-    # Update session state
-    st.session_state['data_source'] = data_source
-    
-    # Load appropriate data based on session state
-    if data_source == "Use Sample Data":
-        # Clear any existing user data when switching to sample data
-        if 'user_data' in st.session_state:
-            st.session_state.pop('user_data', None)
-        df = load_sample_data()
-        st.sidebar.info("Using sample data for demonstration purposes.")
-    else:
-        # Try to load from session state first, then from upload
-        if 'user_data' in st.session_state and st.session_state['user_data'] is not None:
-            df = st.session_state['user_data']
-            st.sidebar.success(f"Using your uploaded dataset with {len(df)} campaigns")
+    st.title("🧠 Agentic Campaign Optimizer")
+    st.caption("Your AI partner for smarter marketing strategies.")
+
+    # Initialize agent in session state if it doesn't exist
+    if 'campaign_agent' not in st.session_state:
+        # Load initial data (sample or uploaded)
+        # For simplicity, using sample data. Integrate your upload_dataset logic here.
+        initial_df = load_sample_data(20)
+        st.session_state.initial_df = initial_df # Store initial df
+        st.session_state.campaign_agent = CampaignStrategyAgent(gemini_service, initial_df)
+        st.session_state.agent_log = st.session_state.campaign_agent.log
+        st.session_state.data_loaded = True # Flag that data is ready
+
+    agent = st.session_state.campaign_agent
+
+    # --- Sidebar for Agent Control & Data ---
+    with st.sidebar:
+        st.header("Agent Control Panel")
+        if not st.session_state.get("data_loaded", False):
+            st.warning("Load data to activate agent.") # Add data uploader here
+            if st.button("Load Sample Data"):
+                 initial_df = load_sample_data(20)
+                 st.session_state.initial_df = initial_df
+                 st.session_state.campaign_agent = CampaignStrategyAgent(gemini_service, initial_df)
+                 st.session_state.agent_log = st.session_state.campaign_agent.log
+                 st.session_state.data_loaded = True
+                 st.rerun()
+
+        if st.session_state.get("data_loaded", False):
+            st.subheader("Define Your Goal")
+            goal_desc = st.text_area("Describe your primary campaign goal:",
+                                     value=st.session_state.get("user_goal_desc", "Maximize overall ROAS within the current budget."),
+                                     height=100)
+            budget_constraint = st.number_input("Overall Budget Constraint (optional, uses current total if 0):",
+                                                min_value=0.0, value=st.session_state.get("user_budget", 0.0), step=1000.0)
             
-            # Add option to use a different dataset
-            if st.sidebar.button("Upload Different Dataset", key="upload_different_dataset"):
-                st.session_state.pop('user_data', None)
-                st.experimental_rerun()
-        else:
-            # Call the upload function
-            uploaded_df = upload_dataset()
-            if uploaded_df is not None:
-                df = uploaded_df
+            if st.button("🚀 Start Agent Analysis & Strategy", type="primary", disabled=(st.session_state.agent_state not in ["idle", "done"])):
+                st.session_state.user_goal_desc = goal_desc
+                st.session_state.user_budget = budget_constraint if budget_constraint > 0 else None
+                agent.set_goal(goal_desc, budget=st.session_state.user_budget)
+                with st.spinner("Agent analyzing data..."):
+                    agent.analyze_data_and_identify_insights()
+                with st.spinner("Agent developing strategies..."):
+                    agent.develop_strategy_options()
+                st.rerun() # Rerun to update UI based on new agent state
+
+        st.subheader("Agent Log")
+        if 'agent_log' in st.session_state:
+            log_container = st.container(height=200)
+            for log_entry in reversed(st.session_state.agent_log): # Show newest first
+                log_container.text(log_entry)
+
+        if st.button("Reset Agent & Data"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+
+    # --- Main Area for Agent Interaction & Results ---
+    if not st.session_state.get("data_loaded", False):
+        st.info("Please load data or define a goal in the sidebar to begin.")
+        return
+
+    # Display Initial Data
+    if st.session_state.agent_state == "idle" and 'initial_df' in st.session_state:
+        st.subheader("Current Campaign Data")
+        st.dataframe(st.session_state.initial_df.head(), height=300)
+        if st.button("View Full Dataset"):
+            st.session_state.view_full_data = True
+        if st.session_state.get("view_full_data", False):
+            st.dataframe(st.session_state.initial_df)
+
+
+    # --- Agent Workflow Steps ---
+    if st.session_state.agent_state == "analyzing":
+        st.subheader("📊 Agent Step 1: Data Analysis & Insights")
+        with st.container(border=True):
+            st.markdown("<p class='agent-thought'>Agent is reviewing the data and forming initial thoughts...</p>", unsafe_allow_html=True)
+            if 'analysis_summary' in st.session_state:
+                with st.expander("View Raw Data Summary (for agent)", expanded=False):
+                    st.text(st.session_state.analysis_summary)
+            if 'analysis_insights' in st.session_state:
+                st.markdown(st.session_state.analysis_insights)
             else:
-                # Fall back to sample data if upload fails or isn't completed
-                df = load_sample_data()
-                st.sidebar.warning("Using sample data. Please upload your dataset to see your own campaign metrics.")
-    
-    # Page-specific content
-    if page == "Campaign Dashboard 📊":
-        # Advanced dashboard visualization
-        create_advanced_dashboard(df)
-        
-        # Export functionality
+                st.info("Agent is currently processing data...")
+
+
+    if st.session_state.agent_state == "strategizing":
+        st.subheader("💡 Agent Step 2: Strategy Development")
+        with st.container(border=True):
+            st.markdown("<p class='agent-thought'>Agent is brainstorming potential strategies based on the analysis and your goal...</p>", unsafe_allow_html=True)
+            if 'strategy_options' in st.session_state and st.session_state.strategy_options:
+                st.write("The agent has proposed the following strategies. Please review and select one:")
+                for i, strat in enumerate(st.session_state.strategy_options):
+                    with st.expander(f"**Strategy {i+1}: {strat.get('name', 'Unnamed Strategy')}**"):
+                        st.markdown(strat.get('full_text', strat.get('description', 'No details provided.')))
+                        if st.button(f"Select Strategy: {strat.get('name', 'Unnamed Strategy')}", key=f"select_strat_{i}"):
+                            with st.spinner("Agent planning execution for selected strategy..."):
+                                agent.select_strategy_and_plan_execution(i)
+                            st.rerun()
+            else:
+                st.info("Agent is formulating strategies...")
+
+    if st.session_state.agent_state == "optimizing":
+        st.subheader("⚙️ Agent Step 3: Optimization / Simulation")
+        with st.container(border=True):
+            st.markdown("<p class='agent-thought'>Agent is now executing the chosen strategy, running optimizations or simulations...</p>", unsafe_allow_html=True)
+            if 'execution_plan_suggestion' in st.session_state:
+                st.info(f"Agent's suggested plan: {st.session_state.execution_plan_suggestion}")
+
+            # Allow user to confirm or adjust budget for optimization
+            opt_budget = st.number_input("Confirm/Adjust Budget for this Optimization Step:",
+                                         min_value=0.0,
+                                         value=agent.current_goal.get('budget', agent.initial_df['Ad Spend'].sum()),
+                                         step=1000.0, key="opt_budget_confirm")
+
+            if st.button("▶️ Run Optimization/Simulation", type="primary"):
+                with st.spinner("Agent performing optimization..."):
+                    agent.execute_optimization_or_simulation(budget_for_optimization=opt_budget)
+                st.rerun()
+
+            if 'optimization_results_df' in st.session_state:
+                st.write("Optimization Results Preview:")
+                st.dataframe(st.session_state.optimization_results_df.head())
+                # Could add a button here to proceed to reporting or refine further
+
+
+    if st.session_state.agent_state == "reporting":
+        st.subheader("📝 Agent Step 4: Final Report & Recommendations")
+        with st.container(border=True):
+            st.markdown("<p class='agent-thought'>Agent is compiling the final report and actionable recommendations...</p>", unsafe_allow_html=True)
+            if 'optimization_results_df' in st.session_state:
+                 st.write("#### Optimized Campaign Allocation:")
+                 # Visual comparison (example)
+                 comparison_df = agent.initial_df[['Campaign', 'Ad Spend', 'Historical Reach', 'ROAS_proxy']].copy()
+                 comparison_df = comparison_df.merge(st.session_state.optimization_results_df[['Campaign', 'Optimized Spend', 'Optimized Reach', 'Optimized ROAS_proxy']], on='Campaign', suffixes=('_orig', '_opt'))
+
+                 fig = go.Figure()
+                 fig.add_trace(go.Bar(name='Original Spend', x=comparison_df['Campaign'], y=comparison_df['Ad Spend_orig']))
+                 fig.add_trace(go.Bar(name='Optimized Spend', x=comparison_df['Campaign'], y=comparison_df['Optimized Spend']))
+                 fig.update_layout(barmode='group', title_text='Original vs. Optimized Spend')
+                 st.plotly_chart(fig, use_container_width=True)
+
+                 st.dataframe(st.session_state.optimization_results_df)
+
+
+            if st.session_state.get('final_recommendations'):
+                st.markdown(st.session_state.final_recommendations)
+            else:
+                if st.button("Generate Final Report", type="primary"):
+                    with st.spinner("Agent generating final report..."):
+                        agent.generate_final_report_and_recommendations()
+                    st.rerun()
+
+    if st.session_state.agent_state == "done":
+        st.subheader("✅ Agent Task Completed")
+        with st.container(border=True):
+            st.markdown(st.session_state.get('final_recommendations', "Report generation pending or failed."))
+            if st.button("Start New Analysis with Same Data"):
+                # Reset agent state but keep data
+                current_df = st.session_state.initial_df.copy()
+                st.session_state.campaign_agent = CampaignStrategyAgent(gemini_service, current_df)
+                st.session_state.agent_log = st.session_state.campaign_agent.log
+                st.session_state.agent_state = "idle"
+                # Clear previous run's specific states
+                for key in ['analysis_summary', 'analysis_insights', 'strategy_options', 'execution_plan_suggestion', 'optimization_results_df', 'final_recommendations', 'user_goal_desc', 'user_budget']:
+                    if key in st.session_state: del st.session_state[key]
+                st.rerun()
+
+    # --- Your existing advanced dashboard and scenario comparison can be called by the agent or offered as separate tools ---
+    # For example, after the agent provides recommendations, you could offer:
+    if st.session_state.agent_state == "done":
+        st.markdown("---")
+        st.subheader("Further Exploration Tools")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Export to CSV", key="export_csv"):
-                export_data(df, "campaign_data", 'csv')
+            if st.button("🔬 Deep Dive: Scenario Simulator"):
+                st.session_state.current_view = "scenario_simulator" # UI state to show simulator
         with col2:
-            if st.button("Export to Excel", key="export_excel"):
-                export_data(df, "campaign_data", 'excel')
-    
-    elif page == "Optimization Engine 🎯":
-        # Budget and customers input
-        budget = st.sidebar.slider(
-            "Total Marketing Budget", 
-            min_value=50000, 
-            max_value=500000, 
-            value=200000
-        )
-        total_customers = st.sidebar.slider(
-            "Total Target Customers", 
-            min_value=10000, 
-            max_value=200000, 
-            value=100000
-        )
-        
-        if st.sidebar.button("Run AI-Powered Optimization", key="run_optimization"):
-            optimize_campaign_with_agentic_ai(df, budget, total_customers)
-    
-    elif page == "AI Insights 🤖":
-        # Existing AI Insights section with unique key for button
-        ai_insights_section(df)
-        st.header("Campaign Strategies Recommendation Powered By Gemini")
-        
-        user_query = st.text_area(
-            "Ask about your campaign strategy with AI:",
-            "Example: What are the key factors affecting campaign reach and how can I improve my marketing efficiency?"
-        )
-        
-        if st.button("Generate Strategic Insights", key="generate_ai_insights"):
-            # Validate the query first
-            is_valid, error_message = validate_campaign_query(user_query)
-            
-            if not is_valid:
-                st.warning(error_message)
-            elif client:
-                try:
-                    with st.spinner("Analyzing campaign data..."):
-                        prompt = f"""
-                        Campaign Data Overview:
-                        Total Campaigns: {len(df)}
-                        Metrics: {', '.join(df.columns)}
-                        
-                        Key Statistics:
-                        - Average Engagement Rate: {df['Engagement Rate'].mean():.2f}
-                        - Total Ad Spend: ${df['Ad Spend'].sum():,.2f}
-                        - Average Historical Reach: {df['Historical Reach'].mean():,.0f}
-                        
-                        User Strategic Query: {user_query}
-                        
-                        Provide concise, data-driven marketing strategy insights.
-                        Focus on actionable recommendations based on the campaign data.
-                        Explain your reasoning using the provided metrics.
-                        """
-                        
-                        response = client.models.generate_content(
-                            model="gemini-2.0-flash",
-                            contents=prompt
-                        )
-                        
-                        st.markdown("### 🧠 AI Strategic Insights")
-                        st.write(response.text)
-                
-                except Exception as e:
-                    st.error(f"AI Insight Generation Error: {e}")
-                    st.write("Fallback Insights:")
-                    st.write("- Review campaigns with high engagement rates")
-                    st.write("- Consider reallocating budget from low-performing campaigns")
-            else:
-                st.error("AI integration currently unavailable")
-    
-    elif page == "Scenario Comparison 📈":
-        st.header("Campaign Scenario Simulator")
-        st.info("""
-        🔬 Compare different marketing allocation scenarios.
-        Experiment with budget and targeting strategies to visualize potential outcomes.
-        """)
-        
-        # Scenario selection
-        scenario_type = st.selectbox(
-            "Select Scenario Type",
-            ["Budget Variation", "Target Audience Change", "Seasonal Impact"]
-        )
-        
-        # Dynamic scenario parameters based on selection
-        parameters = {}
-        
-        if scenario_type == "Budget Variation":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                budget_factor = st.slider(
-                    "Budget Adjustment Factor", 
-                    min_value=0.5, 
-                    max_value=2.0, 
-                    value=1.0, 
-                    step=0.1,
-                    help="Multiply current budget by this factor (e.g., 1.5 = 50% increase)"
-                )
-                parameters['budget_factor'] = budget_factor
-                
-            with col2:
-                elasticity = st.slider(
-                    "Spend-Reach Elasticity", 
-                    min_value=0.1, 
-                    max_value=1.0, 
-                    value=0.7,
-                    step=0.1,
-                    help="How responsive reach is to spend changes (higher = more responsive)"
-                )
-                parameters['elasticity'] = elasticity
-                
-        elif scenario_type == "Target Audience Change":
-            audience_focus = st.radio(
-                "Audience Targeting Strategy",
-                ["Broad", "Balanced", "Narrow"],
-                horizontal=True,
-                help="Broad = larger audience, lower engagement; Narrow = smaller audience, higher engagement"
-            )
-            parameters['audience_focus'] = audience_focus
-            
-        elif scenario_type == "Seasonal Impact":
-            season = st.radio(
-                "Seasonal Period",
-                ["Peak", "Normal", "Low"],
-                horizontal=True,
-                help="How seasonal factors affect campaign performance"
-            )
-            parameters['season'] = season
-        
-        # Run comparison button
-        if st.button("Run Scenario Comparison", key="run_scenario_comparison"):
-            with st.spinner("Simulating scenario..."):
-                # Add slight delay for visual effect
-                time.sleep(0.5)
-                
-                # Run the scenario simulation
-                scenario_df = simulate_scenario(df, scenario_type, parameters)
-                
-                # Display comparison
-                display_scenario_comparison(df, scenario_df, scenario_type, parameters)
-                
-                # Export option
-                st.download_button(
-                    label="Export Scenario Results",
-                    data=scenario_df.to_csv().encode('utf-8'),
-                    file_name=f"campaign_scenario_{scenario_type.lower().replace(' ', '_')}.csv",
-                    mime='text/csv',
-                    key="export_scenario_results"
-                )
+            if st.button("📊 View Advanced Dashboard"):
+                st.session_state.current_view = "advanced_dashboard" # UI state to show dashboard
+
+    if st.session_state.get("current_view") == "scenario_simulator":
+        st.header("Scenario Simulator")
+        # ... (Integrate your scenario simulation UI here, using st.session_state.initial_df or st.session_state.optimization_results_df as base)
+        # Remember to pass the dataframe correctly
+        # scenario_df = simulate_scenario(st.session_state.initial_df, scenario_type, parameters)
+        # display_scenario_comparison(st.session_state.initial_df, scenario_df, scenario_type, parameters)
+        st.info("Scenario Simulator section: Integrate your existing UI components here.")
+
+
+    if st.session_state.get("current_view") == "advanced_dashboard":
+        st.header("Advanced Campaign Dashboard")
+        # ... (Integrate your dashboard here)
+        # create_advanced_dashboard(st.session_state.initial_df) # Or use optimized_df
+        st.info("Advanced Dashboard section: Integrate your existing UI components here.")
+
 
 if __name__ == "__main__":
     main()
