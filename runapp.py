@@ -9,7 +9,7 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objs as go
 
-
+# Attempt to import the correct Gemini library
 try:
     import google.generativeai as genai
     GOOGLE_GEMINI_SDK_AVAILABLE = True
@@ -47,21 +47,18 @@ def initialize_gemini_model():
         print("DEBUG: Gemini SDK not available for model initialization.")
         return None
     try:
-        # Ensure your secret is named "gemini_api" in st.secrets
         api_key = st.secrets["gemini_api"]
         genai.configure(api_key=api_key)
-        # You typically get a model instance
-        model_name = 'gemini-1.5-flash-latest' # Or 'gemini-pro'
+        model_name = 'gemini-1.5-flash-latest'
         model = genai.GenerativeModel(model_name)
         st.success(f"Gemini configured and '{model_name}' model instance obtained successfully.")
         print(f"DEBUG: Gemini model instance created: {type(model)}")
-        return model # Return the model instance
+        return model
     except KeyError as e:
         st.error(f"Failed to initialize Gemini API: Secret key '{e.args[0]}' not found in st.secrets.")
-        st.info(f"Your code is looking for: st.secrets[\"{e.args[0]}\"]. Ensure it's in your secrets.toml or Streamlit Cloud app settings.")
         print(f"DEBUG: KeyError during Gemini init: {e}")
         return None
-    except AttributeError as e_attr: # Should not happen if GOOGLE_GEMINI_SDK_AVAILABLE is true
+    except AttributeError as e_attr:
         st.error(f"Failed to initialize Gemini API: Attribute error '{e_attr}'. This might indicate an SDK issue.")
         print(f"DEBUG: AttributeError during Gemini init: {e_attr}")
         return None
@@ -70,7 +67,7 @@ def initialize_gemini_model():
         print(f"DEBUG: Generic Exception during Gemini init: {e}")
         return None
 
-gemini_model_instance = initialize_gemini_model() # This will be passed to the agent
+gemini_model_instance = initialize_gemini_model()
 
 # --- Core Data Processing & Helper Functions ---
 @st.cache_data(ttl=3600)
@@ -127,8 +124,8 @@ def get_data_summary(df):
 
 # --- Agent Class ---
 class CampaignStrategyAgent:
-    def __init__(self, gemini_model, initial_df): # Takes the model instance
-        self.gemini_model = gemini_model # Store the model instance
+    def __init__(self, gemini_model, initial_df):
+        self.gemini_model = gemini_model
         self.initial_df = initial_df.copy() if initial_df is not None else pd.DataFrame()
         self.current_df = self.initial_df.copy()
         self.log = ["Agent initialized."]
@@ -142,7 +139,7 @@ class CampaignStrategyAgent:
         self.log.append(f"[{timestamp}] {message}")
         st.session_state.agent_log = self.log
 
-    @st.cache_data(show_spinner=False) # Caching LLM calls
+    @st.cache_data(show_spinner=False)
     def _call_gemini(_self, prompt_text, safety_settings=None):
         _self._add_log(f"Attempting to call Gemini. Model type: {type(_self.gemini_model)}")
         if not _self.gemini_model:
@@ -150,47 +147,31 @@ class CampaignStrategyAgent:
             print("DEBUG: _call_gemini - model instance is None.")
             return "Gemini model not available (None)."
         try:
-            # Directly call generate_content on the model instance
             _self._add_log(f"Calling gemini_model.generate_content with prompt: '{prompt_text[:100]}...'")
             print(f"DEBUG: Calling gemini_model.generate_content with prompt: '{prompt_text[:100]}...'")
-            # The new SDK typically takes the prompt string directly for the `contents` argument.
-            # If it errors asking for a list, use: contents=[{'parts': [{'text': prompt_text}]}]
-            response = _self.gemini_model.generate_content(
-                contents=prompt_text,
-                safety_settings=safety_settings
-            )
+            response = _self.gemini_model.generate_content(contents=prompt_text, safety_settings=safety_settings)
             _self._add_log("Gemini call successful (response received).")
             print(f"DEBUG: Gemini response received: {type(response)}")
-
-            # Accessing response text - common patterns for google-generativeai
-            if hasattr(response, 'text') and response.text:
-                return response.text
-            elif response.candidates and response.candidates[0].content.parts: # Standard way
-                return response.candidates[0].content.parts[0].text
-            else: # Fallback for unusual structures or if text is empty but no error
+            if hasattr(response, 'text') and response.text: return response.text
+            elif response.candidates and response.candidates[0].content.parts: return response.candidates[0].content.parts[0].text
+            else:
                 _self._add_log(f"Warning: Could not extract text using common attributes. Candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}, Text attr: {hasattr(response, 'text')}")
-                print(f"DEBUG: No text in Gemini response. Candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}")
                 return "Could not extract text from Gemini response (structure not recognized or empty)."
         except Exception as e:
             _self._add_log(f"Error during actual Gemini API call: {str(e)}")
             print(f"DEBUG: Exception during Gemini API call: {e}")
-            # Check if the error is about the 'contents' argument format
             if "contents" in str(e).lower() and ("string" in str(e).lower() or "list" in str(e).lower()):
                 _self._add_log(f"Retrying Gemini call with list structure for contents due to error: {e}")
                 try:
-                    response = _self.gemini_model.generate_content(
-                        contents=[{'parts': [{'text': prompt_text}]}], # Retry with list structure
-                        safety_settings=safety_settings
-                    )
+                    response = _self.gemini_model.generate_content(contents=[{'parts': [{'text': prompt_text}]}], safety_settings=safety_settings)
                     if hasattr(response, 'text') and response.text: return response.text
                     elif response.candidates and response.candidates[0].content.parts: return response.candidates[0].content.parts[0].text
                     else: return "Could not extract text from Gemini response (retry, structure not recognized)."
                 except Exception as e_retry:
                     _self._add_log(f"Error during Gemini API call (retry with list): {str(e_retry)}")
                     return f"Error during Gemini API call (retry with list): {str(e_retry)}"
-            return f"Error during Gemini API call: {str(e)}" # Return original error if not 'contents' related
+            return f"Error during Gemini API call: {str(e)}"
 
-    # --- Other agent methods (set_goal, analyze_data_and_identify_insights, etc.) ---
     def set_goal(self, goal_description, budget=None, target_metric_improvement=None):
         self.current_goal = {"description": goal_description, "budget": budget, "target_metric_improvement": target_metric_improvement}
         self._add_log(f"Goal set: {goal_description}"); st.session_state.agent_state = "analyzing"
@@ -207,7 +188,7 @@ class CampaignStrategyAgent:
 
     def develop_strategy_options(self):
         current_analysis_insights = st.session_state.get('analysis_insights', '')
-        if not current_analysis_insights or any(err_msg in str(current_analysis_insights).lower() for err_msg in ["gemini model not available", "error calling gemini", "gemini client structure incorrect", "could not extract text"]): # Broader error check
+        if not current_analysis_insights or any(err_msg in str(current_analysis_insights).lower() for err_msg in ["gemini model not available", "error calling gemini", "could not extract text"]):
             self._add_log(f"Error: Analysis must be run successfully. Current insights: '{str(current_analysis_insights)[:100]}...'")
             st.session_state.strategy_options = []; return []
         self._add_log("Developing strategy options..."); st.session_state.agent_state = "strategizing"
@@ -280,7 +261,6 @@ def main():
         print("DEBUG: Initializing campaign_agent in session_state.")
         initial_df_data = load_sample_data(20)
         st.session_state.initial_df = initial_df_data
-        # Pass the gemini_model_instance to the agent
         st.session_state.campaign_agent = CampaignStrategyAgent(gemini_model_instance, initial_df_data)
         st.session_state.agent_log = st.session_state.campaign_agent.log if hasattr(st.session_state.campaign_agent, 'log') else ["Log not available."]
         st.session_state.data_loaded = True
@@ -301,7 +281,7 @@ def main():
             budget_val = st.session_state.initial_df['Ad Spend'].sum() if 'initial_df' in st.session_state and not st.session_state.initial_df.empty else 50000
             budget_constraint = st.number_input("Overall Budget Constraint (0 for current total):", min_value=0.0, value=st.session_state.get("user_budget", budget_val), step=1000.0)
             agent_busy = (st.session_state.agent_state not in ["idle", "done"] and st.session_state.agent_state is not None)
-            gemini_unavailable_in_agent = agent.gemini_model is None # Check agent's model instance
+            gemini_unavailable_in_agent = agent.gemini_model is None
             button_disabled = agent_busy or gemini_unavailable_in_agent or not GOOGLE_GEMINI_SDK_AVAILABLE
 
             if st.button("🚀 Start Agent Analysis & Strategy", type="primary", disabled=button_disabled):
@@ -318,13 +298,18 @@ def main():
 
         st.subheader("Agent Log")
         if 'agent_log' in st.session_state:
-            log_container = st.container(height=200); [log_container.text(log_entry) for log_entry in reversed(st.session_state.agent_log)]
+            log_container = st.container(height=200)
+            for log_entry in reversed(st.session_state.agent_log): # Corrected list comprehension to simple loop
+                log_container.text(log_entry)
         if st.button("Reset Agent & Data"):
-            keys_to_clear = list(st.session_state.keys()); [del st.session_state[key] for key in keys_to_clear]; st.rerun()
+            keys_to_clear = list(st.session_state.keys())
+            for key_to_del in keys_to_clear: # Corrected loop for deletion
+                if key_to_del in st.session_state:
+                    del st.session_state[key_to_del]
+            st.rerun()
 
     if not st.session_state.get("data_loaded", False): st.info("Please load data or define a goal to begin."); return
 
-    # --- Main area UI states ---
     ui_state = st.session_state.agent_state
     if ui_state == "idle" and 'initial_df' in st.session_state:
         st.subheader("Current Campaign Data Preview"); st.dataframe(st.session_state.initial_df.head())
@@ -396,10 +381,12 @@ def main():
             if st.button("Start New Analysis (Same Data)"):
                 current_df_data = st.session_state.initial_df.copy()
                 st.session_state.campaign_agent = CampaignStrategyAgent(gemini_model_instance, current_df_data)
-                st.session_state.agent_log = st.session_state.campaign_agent.log; st.session_state.agent_state = "idle"
+                st.session_state.agent_log = st.session_state.campaign_agent.log
+                st.session_state.agent_state = "idle"
                 keys_to_reset = ['analysis_summary', 'analysis_insights', 'strategy_options', 'execution_plan_suggestion', 'optimization_results_df', 'final_recommendations', 'user_goal_desc', 'user_budget', 'view_full_data']
-                for key in keys_to_reset:
-                    if key in st.session_state: del st.session_state[key]
+                for key_to_del in keys_to_reset: # Corrected loop
+                    if key_to_del in st.session_state:
+                        del st.session_state[key_to_del]
                 st.rerun()
 
 if __name__ == "__main__":
