@@ -536,7 +536,20 @@ def main():
                 st.session_state.raw_uploaded_df = None # Clear uploaded data
                 st.session_state.column_mapping = None
                 st.experimental_rerun()
+                
+        st.subheader("Agent Log")
+        if 'agent_log' in st.session_state:
 
+            # Sanitize log entries: ensure max length, strip control chars
+            sanitized_log = [str(log_entry[:500]).encode("ascii", "ignore").decode() for log_entry in st.session_state.agent_log] # truncate, remove odd characters
+
+            # More robust display using st.text_area for the entire log
+            log_string = "\n".join(reversed(sanitized_log))
+            st.text_area("Agent Log", value=log_string, height=200, disabled=True)
+
+        if st.button("Reset Agent State"):
+            # ... (Clear session state as before)
+            st.rerun()
 
         st.divider()
         # Agent control - only if data is processed
