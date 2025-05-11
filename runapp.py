@@ -139,14 +139,49 @@ def get_data_summary(df): # This function is now defined before Agent class
 
 # --- Data Loading and Processing (calculate_derived_metrics must be defined before being called by others) ---
 def safe_divide(numerator, denominator, default_val=0):
-    if isinstance(numerator, (int, float)) and isinstance(denominator, pd.Series):
+    # Handle cases where inputs might be single numbers (scalars)
+    is_numerator_scalar = isinstance(numerator, (int, float, np.number))
+    is_denominator_scalar = isinstance(denominator, (int, float, np.number))
+
+    if is_numerator_scalar and is_denominator_scalar:
+        if denominator != 0:
+            result = numerator / denominator
+        else:
+            result = default_val # or np.nan if you prefer to handle NaNs later, but default_val is safer here
+        # Check for inf/-inf if division occurred
+        if np.isinf(result) or np.isneginf(result):
+            return default_val
+        return result # Result is a scalar, no .replace() or .fillna() needed
+
+    # If we reach here, at least one is a Series, or we want to treat scalars as series
+    # Ensure series for broadcasting if one is scalar and other is series
+    if is_numerator_scalar and isinstance(denominator, pd.Series):
         numerator = pd.Series(numerator, index=denominator.index)
-    elif isinstance(denominator, (int, float)) and isinstance(numerator, pd.Series):
+    elif is_denominator_scalar and isinstance(numerator, pd.Series):
         denominator = pd.Series(denominator, index=numerator.index)
+    elif is_numerator_scalar and is_denominator_scalar: # Should have been caught above, but for safety
+        # This case should ideally not be reached if the first block works
+        # but if it is, and we want a series output, we need an index
+        # This situation is tricky without a predefined index for scalar/scalar -> series.
+        # For now, assume if both are scalar, the first block handles it.
+        # If you intended scalar/scalar to become a Series, an index must be provided or inferred.
+        pass
+
+
+    # Perform division for Series
     if isinstance(denominator, pd.Series):
+        # For series, divide where denominator is not zero, else result in NaN
         result = numerator.divide(denominator.where(denominator != 0, np.nan))
-    elif denominator != 0: result = numerator / denominator
-    else: result = pd.Series(default_val, index=numerator.index) if isinstance(numerator, pd.Series) else default_val
+    elif isinstance(numerator, pd.Series) and denominator != 0 : # Numerator is Series, Denominator is non-zero scalar
+        result = numerator / denominator
+    elif isinstance(numerator, pd.Series) and denominator == 0: # Numerator is Series, Denominator is zero scalar
+        result = pd.Series(np.nan, index=numerator.index) # Series of NaNs
+    else:
+        # Fallback for unhandled cases, though ideally covered.
+        # This might occur if inputs are unexpected types.
+        result = pd.Series(default_val) # Default to a series with default_val
+
+    # For Series, .replace and .fillna are valid
     return result.replace([np.inf, -np.inf], default_val).fillna(default_val)
 
 def calculate_derived_metrics(df):
