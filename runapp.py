@@ -57,27 +57,50 @@ else: st.sidebar.warning("Gemini AI not connected.")
 
 # --- Data Loading and Processing ---
 @st.cache_data(ttl=3600)
-def load_sample_data(num_campaigns=15):
+def load_sample_data(num_campaigns=15): # This function will now return a df with standardized column names
     np.random.seed(42)
     start_date = datetime(2023, 1, 1)
+    # Original column names as they might appear in a sample file
     data = {
         "Campaign Name": [f"Campaign Series {chr(65+i%3)}-{i//3+1}" for i in range(num_campaigns)],
-        "Date": [pd.to_datetime(start_date + pd.Timedelta(days=i*7)) for i in range(num_campaigns)], # Added Date
-        "Spend": np.random.uniform(500, 25000, num_campaigns),
+        "Date": [pd.to_datetime(start_date + pd.Timedelta(days=i*7)) for i in range(num_campaigns)],
+        "Spend": np.random.uniform(500, 25000, num_campaigns), # Original-like name
         "Impressions": np.random.randint(50000, 2000000, num_campaigns),
         "Clicks": np.random.randint(100, 10000, num_campaigns),
         "Reach": np.random.randint(2000, 120000, num_campaigns),
         "Conversions": np.random.randint(10, 500, num_campaigns),
         "Revenue": np.random.uniform(1000, 50000, num_campaigns)
     }
-    df = pd.DataFrame(data)
-    df['Spend'] = df['Spend'].round(2)
-    df['Revenue'] = df['Revenue'].round(2)
-    df = calculate_derived_metrics(df.copy(), {k: k.replace(" ", "_").lower() for k in df.columns}) # Use mapped names
-    return df
+    df_original_names = pd.DataFrame(data)
+    df_original_names['Spend'] = df_original_names['Spend'].round(2)
+    df_original_names['Revenue'] = df_original_names['Revenue'].round(2)
+
+    # Create the mapping from original sample names to standard internal names
+    # This simulates what map_columns_ui and standardize_and_derive_data would do
+    sample_column_mapping = {}
+    for internal_name, variations in EXPECTED_COLUMNS.items():
+        found_col = find_column(df_original_names.columns, variations)
+        if found_col:
+            sample_column_mapping[internal_name] = found_col
+
+    # Standardize column names for the sample data
+    df_standardized = pd.DataFrame()
+    for internal_name, original_col_name in sample_column_mapping.items():
+        if original_col_name in df_original_names.columns:
+            df_standardized[internal_name] = df_original_names[original_col_name]
+
+    # Type conversion for standardized sample data
+    if "date" in df_standardized.columns:
+        df_standardized["date"] = pd.to_datetime(df_standardized["date"], errors='coerce')
+    for col in ["spend", "impressions", "clicks", "reach", "conversions", "revenue"]:
+        if col in df_standardized.columns:
+            df_standardized[col] = pd.to_numeric(df_standardized[col], errors='coerce').fillna(0)
+
+    # Now call calculate_derived_metrics with the standardized DataFrame
+    df_with_derived = calculate_derived_metrics(df_standardized.copy()) # No need to pass mapping here anymore
+    return df_with_derived
 
 def find_column(df_columns, variations):
-    """Tries to find a column in df_columns that matches one of the variations (case-insensitive)."""
     for var in variations:
         for col in df_columns:
             if var.lower() == col.lower():
@@ -86,102 +109,102 @@ def find_column(df_columns, variations):
 
 def process_uploaded_file(uploaded_file):
     try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        elif uploaded_file.name.endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(uploaded_file)
-        else:
-            st.error("Unsupported file type. Please upload CSV or Excel.")
-            return None
-        st.success(f"Successfully loaded '{uploaded_file.name}'")
-        return df
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        return None
+        if uploaded_file.name.endswith('.csv'): df = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(('.xls', '.xlsx')): df = pd.read_excel(uploaded_file)
+        else: st.error("Unsupported file type."); return None
+        st.success(f"Loaded '{uploaded_file.name}'"); return df
+    except Exception as e: st.error(f"Error reading file: {e}"); return None
 
 def map_columns_ui(df_raw):
     st.subheader("Map Your Columns")
-    st.write("Please map your spreadsheet columns to our standard fields for analysis.")
+    st.write("Map your sheet columns to our standard fields.")
     df_columns = list(df_raw.columns)
-    mapped_columns = {}
-    cols = st.columns(2)
-    col_idx = 0
-
-    for internal_name, variations in EXPECTED_COLUMNS.items():
-        current_col_streamlit = cols[col_idx % 2]
-        col_idx += 1
-
+    mapped_cols_dict = {} # Using a different name to avoid confusion with session_state key
+    cols_ui = st.columns(2)
+    for i, (internal_name, variations) in enumerate(EXPECTED_COLUMNS.items()):
+        ui_col = cols_ui[i % 2]
         found_col = find_column(df_columns, variations)
-        # Add a "None" option to allow users to specify if a column is not present
         options = ["None (Column not present)"] + df_columns
-        default_index = options.index(found_col) if found_col else 0
-
-        selected_col = current_col_streamlit.selectbox(
-            f"Standard: '{internal_name.replace('_', ' ').title()}' (e.g., {variations[0]})",
-            options,
-            index=default_index,
-            key=f"map_{internal_name}"
-        )
+        default_idx = options.index(found_col) if found_col else 0
+        selected_col = ui_col.selectbox(f"'{internal_name.replace('_', ' ').title()}' (e.g., {variations[0]})", options, index=default_idx, key=f"map_{internal_name}")
         if selected_col != "None (Column not present)":
-            mapped_columns[internal_name] = selected_col
-    return mapped_columns
+            mapped_cols_dict[internal_name] = selected_col
+    return mapped_cols_dict
 
-def standardize_and_derive_data(df_raw, column_mapping):
-    df = pd.DataFrame()
-    final_mapping = {} # To store what original column was mapped to what internal name
-    for internal_name, original_col_name in column_mapping.items():
+def standardize_and_derive_data(df_raw, column_mapping_from_ui):
+    df_standardized = pd.DataFrame()
+    final_mapping_used = {} # To store what original column was mapped to what internal name
+
+    for internal_name, original_col_name in column_mapping_from_ui.items():
         if original_col_name in df_raw.columns:
-            df[internal_name] = df_raw[original_col_name]
-            final_mapping[internal_name] = original_col_name # For display later if needed
-        else: # Should not happen if mapping UI is used correctly
-            st.warning(f"Column '{original_col_name}' mapped to '{internal_name}' not found in uploaded data. Skipping '{internal_name}'.")
+            df_standardized[internal_name] = df_raw[original_col_name]
+            final_mapping_used[internal_name] = original_col_name
+        else:
+            st.warning(f"Mapped column '{original_col_name}' for '{internal_name}' not found. Skipping.")
 
-    # Type conversion for essential columns
-    if "date" in df.columns:
-        try:
-            df["date"] = pd.to_datetime(df["date"])
-        except Exception as e:
-            st.warning(f"Could not convert 'date' column to datetime: {e}. Time series analysis might be affected.")
+    # Type conversion
+    if "date" in df_standardized.columns:
+        try: df_standardized["date"] = pd.to_datetime(df_standardized["date"], errors='coerce')
+        except Exception as e: st.warning(f"Date conversion error: {e}")
     for col in ["spend", "impressions", "clicks", "reach", "conversions", "revenue"]:
-        if col in df.columns:
-            try:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            except Exception as e:
-                 st.warning(f"Could not convert '{col}' column to numeric: {e}. Calculations might be affected.")
-                 df[col] = 0 # Fallback to 0
+        if col in df_standardized.columns:
+            try: df_standardized[col] = pd.to_numeric(df_standardized[col], errors='coerce').fillna(0)
+            except Exception as e: st.warning(f"Numeric conversion error for '{col}': {e}"); df_standardized[col] = 0
 
-    df = calculate_derived_metrics(df, column_mapping)
-    st.session_state.final_column_mapping = final_mapping # Save for reference
-    return df
+    # Calculate derived metrics using the now standardized DataFrame
+    df_with_derived = calculate_derived_metrics(df_standardized.copy())
+    st.session_state.final_column_mapping = final_mapping_used
+    return df_with_derived
 
-def calculate_derived_metrics(df, column_mapping):
-    """Calculates derived metrics based on available standard internal column names."""
-    # Check for presence of mapped columns, not the original names
-    # Use .get() with a default for safety in case a column wasn't mapped or is missing
-    spend = df.get("spend", pd.Series(0, index=df.index))
-    impressions = df.get("impressions", pd.Series(0, index=df.index))
-    clicks = df.get("clicks", pd.Series(0, index=df.index))
-    conversions = df.get("conversions", pd.Series(0, index=df.index))
-    revenue = df.get("revenue", pd.Series(0, index=df.index))
-    reach = df.get("reach", pd.Series(0, index=df.index))
+def calculate_derived_metrics(df):
+    """Calculates derived metrics. Assumes df has standardized column names."""
+    df = df.copy() # Work on a copy
 
+    def safe_divide(numerator, denominator, default_val=0):
+        # Ensure series for broadcasting if one is scalar and other is series
+        if isinstance(numerator, (int, float)) and isinstance(denominator, pd.Series):
+            numerator = pd.Series(numerator, index=denominator.index)
+        elif isinstance(denominator, (int, float)) and isinstance(numerator, pd.Series):
+            denominator = pd.Series(denominator, index=numerator.index)
 
-    df["cpc"] = (spend / clicks).replace([np.inf, -np.inf], 0).fillna(0)  # Cost Per Click
-    df["cpm"] = (spend / impressions * 1000).replace([np.inf, -np.inf], 0).fillna(0)  # Cost Per Mille (Thousand Impressions)
-    df["ctr"] = (clicks / impressions * 100).replace([np.inf, -np.inf], 0).fillna(0)  # Click-Through Rate
-    df["cpa"] = (spend / conversions).replace([np.inf, -np.inf], 0).fillna(0)  # Cost Per Acquisition/Conversion
-    df["conversion_rate"] = (conversions / clicks * 100).replace([np.inf, -np.inf], 0).fillna(0) # Conversion Rate (from Clicks)
-    df["roas"] = (revenue / spend).replace([np.inf, -np.inf], 0).fillna(0) # Return on Ad Spend
+        # Perform division
+        if isinstance(denominator, pd.Series):
+            # For series, divide where denominator is not zero
+            result = numerator.divide(denominator.where(denominator != 0, np.nan))
+        elif denominator != 0:
+            result = numerator / denominator
+        else: # scalar denominator is zero
+            if isinstance(numerator, pd.Series):
+                result = pd.Series(default_val, index=numerator.index)
+            else:
+                result = default_val
+        return result.replace([np.inf, -np.inf], default_val).fillna(default_val)
 
-    # For agent compatibility (can be removed if agent adapts to new names)
-    df['ROAS_proxy'] = df['roas']
-    df['Ad Spend'] = df['spend']
-    df['Historical Reach'] = df['reach']
-    df['Engagement Rate'] = df['ctr'] # Using CTR as a proxy for engagement rate
-    df['Conversion Rate'] = df['conversion_rate'] # This is now distinct
-    if "campaign_name" in df.columns:
-        df['Campaign'] = df['campaign_name']
+    spend = df.get("spend", 0)
+    impressions = df.get("impressions", 0)
+    clicks = df.get("clicks", 0)
+    conversions = df.get("conversions", 0)
+    revenue = df.get("revenue", 0)
 
+    df["cpc"] = safe_divide(spend, clicks)
+    df["cpm"] = safe_divide(spend, impressions) * 1000
+    df["ctr"] = safe_divide(clicks, impressions) * 100
+    df["cpa"] = safe_divide(spend, conversions)
+    df["conversion_rate"] = safe_divide(conversions, clicks) * 100
+    df["roas"] = safe_divide(revenue, spend)
+
+    # Agent compatibility names
+    if "roas" in df.columns: df['ROAS_proxy'] = df['roas']
+    else: df['ROAS_proxy'] = 0
+    if "spend" in df.columns: df['Ad Spend'] = df['spend']
+    else: df['Ad Spend'] = 0
+    if "reach" in df.columns: df['Historical Reach'] = df['reach']
+    else: df['Historical Reach'] = 0
+    if "ctr" in df.columns: df['Engagement Rate'] = df['ctr']
+    else: df['Engagement Rate'] = 0
+    if "conversion_rate" in df.columns: df['Conversion Rate'] = df['conversion_rate']
+    else: df['Conversion Rate'] = 0
+    if "campaign_name" in df.columns: df['Campaign'] = df['campaign_name']
     return df
 
 # --- Dashboard Functions ---
