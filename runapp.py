@@ -268,6 +268,12 @@ class CampaignStrategyAgent:
         raw = self._call_gemini(prompt); self._add_log(f"LLM strats: '{str(raw)[:70]}...'")
         self.strategy_options=[]
         valid_strats = raw and str(raw).strip() and not any(str(raw).lower().startswith(e) for e in err_prefs)
+            # ---- DEBUG: Print the prompt ----
+    print("-" * 50)
+    print("PROMPT FOR STRATEGY GENERATION:")
+    print(prompt_for_strategies)
+    print("-" * 50)
+    # ---- END DEBUG ----
         if raw and "--- STRATEGY START ---" in raw and valid_strats:
             for i,opt in enumerate(raw.split("--- STRATEGY START ---")[1:]):
                 opt=opt.split("--- STRATEGY END ---")[0].strip()
