@@ -300,7 +300,7 @@ class CampaignStrategyAgent:
     def __init__(self, gemini_model, initial_df_with_agent_compat_names):
         self.gemini_model = gemini_model
         self.initial_df = initial_df_with_agent_compat_names.copy() if initial_df_with_agent_compat_names is not None else pd.DataFrame()
-        self.current_df = self.initial_df.copy() # Agent works with this df which should have agent-compatible names
+        self.current_df = self.initial_df.copy()
         self.log = ["Agent initialized."]
         self.current_goal = None; self.strategy_options = []; self.chosen_strategy_details = None
         self.optimization_results = None; self.recommendations = ""
@@ -312,7 +312,7 @@ class CampaignStrategyAgent:
         if 'agent_log' not in st.session_state or not isinstance(st.session_state.agent_log, list):
             st.session_state.agent_log = []
         new_log_entry = f"[{timestamp}] {msg}"
-        st.session_state.agent_log = [new_log_entry] + st.session_state.agent_log[:49] # Keep last 50 entries
+        st.session_state.agent_log = [new_log_entry] + st.session_state.agent_log[:49]
         self.log = st.session_state.agent_log
 
     @st.cache_data(show_spinner=False, persist="disk")
@@ -341,22 +341,16 @@ class CampaignStrategyAgent:
         self.current_goal = {"description":goal_description,"budget":budget,"target_metric_improvement":target_metric_improvement}
         self._add_log(f"Goal: {goal_description}"); st.session_state.agent_state = "analyzing"
 
-    def analyze_data_and_identify_insights(self): # CORRECTED HERE
-        if self.current_df.empty:
-            self._add_log("Err: No data for analysis.")
-            st.session_state.analysis_insights="No data."
-            st.session_state.analysis_summary="No data summary available." # Ensure this is set
-            st.session_state.agent_state="idle"
-            return {"summary":"No data summary available.", "insights":"No data."} # Use the string
-
+    def analyze_data_and_identify_insights(self):
+        if self.current_df.empty: self._add_log("Err: No data for analysis."); st.session_state.analysis_insights="No data."; st.session_state.analysis_summary="No data summary."; st.session_state.agent_state="idle"; return {"summary":"No data summary.", "insights":"No data."}
         self._add_log("Starting analysis..."); st.session_state.agent_state = "analyzing"
-        data_summary = get_data_summary(self.current_df) # 'data_summary' is defined
+        data_summary = get_data_summary(self.current_df)
         self._add_log("Data summary generated."); st.session_state.analysis_summary = data_summary
         prompt = f"Analyze campaign data for goal: {self.current_goal['description']}.\nBudget: {self.current_goal.get('budget','N/A')}.\nData Summary:\n{data_summary}\nProvide: Key Observations, Opportunities, Risks. Concise."
         self._add_log("Querying LLM for insights...")
         insights = self._call_gemini(prompt); self._add_log(f"LLM insights: '{str(insights)[:70]}...'")
         st.session_state.analysis_insights = insights; st.session_state.agent_state = "strategizing"
-        return {"summary":data_summary, "insights":insights} # Use data_summary
+        return {"summary":data_summary, "insights":insights}
 
     def develop_strategy_options(self):
         current_analysis_insights = st.session_state.get('analysis_insights', '')
@@ -377,21 +371,16 @@ class CampaignStrategyAgent:
         is_strat_gen_valid = True
         if not raw_strategies or not str(raw_strategies).strip(): is_strat_gen_valid = False
         else:
-            for err_out in known_error_outputs: # Check if strategy generation itself returned an error
+            for err_out in known_error_outputs:
                 if str(raw_strategies).lower().startswith(err_out.lower()): is_strat_gen_valid = False; break
         
         if raw_strategies and is_strat_gen_valid:
             split_keyword = "--- STRATEGY SEPARATOR ---"
             strategy_blocks = raw_strategies.split(split_keyword) if split_keyword in raw_strategies else []
-            if not strategy_blocks and raw_strategies: # Fallback if separator not found
-                 # Try to split by "Strategy Name:" but be careful not to create empty first element if string starts with it
+            if not strategy_blocks and raw_strategies:
                 temp_blocks = re.split(r'\bStrategy Name:\s*', raw_strategies, flags=re.IGNORECASE)
-                if temp_blocks:
-                    strategy_blocks = [("Strategy Name: " + block if i > 0 or not raw_strategies.lower().startswith("strategy name:") else block) for i, block in enumerate(temp_blocks) if block.strip()]
-            if not strategy_blocks and raw_strategies.strip(): # If still no blocks, treat the whole thing as one
-                strategy_blocks = [raw_strategies]
-
-
+                if temp_blocks: strategy_blocks = [("Strategy Name: " + block if i > 0 or not raw_strategies.lower().startswith("strategy name:") else block) for i, block in enumerate(temp_blocks) if block.strip()]
+            if not strategy_blocks and raw_strategies.strip(): strategy_blocks = [raw_strategies]
             for i, block_text in enumerate(strategy_blocks):
                 block_text = block_text.strip()
                 if not block_text: continue
@@ -412,29 +401,58 @@ class CampaignStrategyAgent:
         prompt=f"Strategy: {self.chosen_strategy_details.get('name')}\nDetails: {self.chosen_strategy_details.get('full_text')}\nGoal: {self.current_goal['description']}\nSuggest next step (e.g., 'Run budget optimization for ROAS')."
         plan=self._call_gemini(prompt); self._add_log(f"Exec plan: {plan}"); st.session_state.execution_plan_suggestion=plan
 
-    def execute_optimization_or_simulation(self,budget_p=None):
-        self._add_log("Executing opt..."); st.session_state.agent_state="optimizing"
-        df=self.current_df.copy()
-        if df.empty: self._add_log("No data to opt."); st.session_state.optimization_results_df=pd.DataFrame(); st.session_state.agent_state="reporting"; return pd.DataFrame()
-        b=budget_p if budget_p is not None else self.current_goal.get('budget',df['Ad Spend'].sum() if 'Ad Spend' in df and not df.empty else 0)
-        rc='ROAS_proxy'
-        if rc not in df or df[rc].isna().all() or df[rc].eq(0).all():
-            self._add_log(f"{rc} N/A. Equal alloc."); df['Optimized Spend']=safe_divide(b,len(df)) if len(df)>0 else 0.0
+    def execute_optimization_or_simulation(self, budget_param=None): # REFINED METHOD
+        self._add_log("Executing optimization...")
+        st.session_state.agent_state = "optimizing"
+        df = self.current_df.copy()
+
+        if df.empty:
+            self._add_log("No data to optimize.")
+            st.session_state.optimization_results_df = pd.DataFrame()
+            st.session_state.agent_state = "reporting"
+            return pd.DataFrame()
+
+        try:
+            if budget_param is not None: current_budget_total = float(budget_param)
+            elif self.current_goal and self.current_goal.get('budget') is not None: current_budget_total = float(self.current_goal.get('budget'))
+            elif 'Ad Spend' in df.columns and not df.empty and pd.api.types.is_numeric_dtype(df['Ad Spend']): current_budget_total = float(df['Ad Spend'].sum())
+            else: current_budget_total = 0.0
+            if pd.isna(current_budget_total): current_budget_total = 0.0
+            self._add_log(f"Opt budget: {current_budget_total:,.2f}")
+        except (ValueError, TypeError) as e:
+            self._add_log(f"Err: Invalid budget ({budget_param}). Using 0. Err: {e}"); current_budget_total = 0.0
+
+        cols_to_ensure_numeric = ['ROAS_proxy', 'Ad Spend', 'Historical Reach', 'Engagement Rate', 'Conversion Rate', 'Est Revenue Per Conversion']
+        for col_name in cols_to_ensure_numeric:
+            if col_name not in df.columns:
+                self._add_log(f"Warn: Col '{col_name}' missing. Defaulting."); df[col_name] = 0.0
+                if col_name == 'Est Revenue Per Conversion': df[col_name] = 50.0
+            elif not pd.api.types.is_numeric_dtype(df[col_name]):
+                try: df[col_name] = pd.to_numeric(df[col_name], errors='coerce'); self._add_log(f"Warn: Col '{col_name}' converted to numeric.")
+                except Exception as e_conv: self._add_log(f"Err converting '{col_name}': {e_conv}. Defaulting."); df[col_name] = 0.0
+            df[col_name] = df[col_name].fillna(0.0)
+
+        roas_col_for_opt = 'ROAS_proxy'
+        if roas_col_for_opt not in df.columns or df[roas_col_for_opt].isna().all() or df[roas_col_for_opt].eq(0).all():
+            self._add_log(f"'{roas_col_for_opt}' N/A. Equal alloc."); df['Optimized Spend'] = safe_divide(current_budget_total, len(df)) if len(df) > 0 else 0.0
         else:
-            mr=df[rc].min(skipna=True); ra=df[rc].fillna(0)+abs(mr if pd.notnull(mr) else 0)+1e-3
-            if ra.sum()>0: df['Budget Weight']=ra/ra.sum(); df['Optimized Spend']=df['Budget Weight']*b
-            else: self._add_log("Adj ROAS sum 0. Equal alloc."); df['Optimized Spend']=safe_divide(b,len(df)) if len(df)>0 else 0.0
-        df['Optimized Spend']=df['Optimized Spend'].fillna(0.0)
+            min_roas_val = df[roas_col_for_opt].min(skipna=True)
+            roas_adj = df[roas_col_for_opt].fillna(0) + abs(min_roas_val if pd.notnull(min_roas_val) else 0) + 1e-3
+            if roas_adj.sum() > 0: df['Budget Weight'] = roas_adj / roas_adj.sum(); df['Optimized Spend'] = df['Budget Weight'] * current_budget_total
+            else: self._add_log("Adj ROAS sum 0. Equal alloc."); df['Optimized Spend'] = safe_divide(current_budget_total, len(df)) if len(df) > 0 else 0.0
+        df['Optimized Spend'] = df['Optimized Spend'].fillna(0.0)
         df['Spend Ratio']=df.apply(lambda r:safe_divide(r.get('Optimized Spend',0.0),r.get('Ad Spend',0.0)) if r.get('Ad Spend',0.0)>0 else 1.0,axis=1)
         df['Optimized Reach']=(df.get('Historical Reach',0.0)*df['Spend Ratio']).round(0)
-        if all(c in df for c in ['Optimized Reach','Optimized Spend']) and 'Engagement Rate' in df and 'Conversion Rate' in df :
-             est_rev_pc_series = self.initial_df.get('Est Revenue Per Conversion', pd.Series([50.0]))
-             est_rev_pc = est_rev_pc_series.mean() if isinstance(est_rev_pc_series, pd.Series) and not est_rev_pc_series.empty else 50.0
-             if pd.isna(est_rev_pc): est_rev_pc = 50.0
-             df['Optimized Est Conversions']=(df['Optimized Reach']*safe_divide(df.get('Engagement Rate',0.0),100)*safe_divide(df.get('Conversion Rate',0.0),100)).round(0)
-             df['Optimized Est Revenue']=df['Optimized Est Conversions']*est_rev_pc
-             df['Optimized ROAS_proxy']=safe_divide(df['Optimized Est Revenue'],df.get('Optimized Spend',0.0))
-        else: self._add_log("Missing cols for Opt ROAS_proxy."); df['Optimized ROAS_proxy']=0.0
+        opt_reach_s = df.get('Optimized Reach', pd.Series(0.0, index=df.index))
+        eng_rate_s = df.get('Engagement Rate', pd.Series(0.0, index=df.index))
+        conv_rate_s = df.get('Conversion Rate', pd.Series(0.0, index=df.index))
+        opt_spend_s = df.get('Optimized Spend', pd.Series(0.0, index=df.index))
+        est_rev_pc = df.get('Est Revenue Per Conversion', 50.0)
+        if isinstance(est_rev_pc, pd.Series): est_rev_pc = est_rev_pc.mean() if not est_rev_pc.empty else 50.0
+        if pd.isna(est_rev_pc): est_rev_pc = 50.0
+        df['Optimized Est Conversions']=(opt_reach_s * safe_divide(eng_rate_s,100.0) * safe_divide(conv_rate_s,100.0)).round(0)
+        df['Optimized Est Revenue']=df['Optimized Est Conversions']*est_rev_pc
+        df['Optimized ROAS_proxy']=safe_divide(df['Optimized Est Revenue'],opt_spend_s); df['Optimized ROAS_proxy']=df['Optimized ROAS_proxy'].fillna(0.0)
         cols_k=['Campaign','Ad Spend','Optimized Spend','Historical Reach','Optimized Reach','ROAS_proxy','Optimized ROAS_proxy']
         self.optimization_results=df[[c for c in cols_k if c in df]].copy()
         self._add_log("Opt complete."); st.session_state.optimization_results_df=self.optimization_results
