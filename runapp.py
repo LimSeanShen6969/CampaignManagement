@@ -401,17 +401,11 @@ class CampaignStrategyAgent:
         prompt=f"Strategy: {self.chosen_strategy_details.get('name')}\nDetails: {self.chosen_strategy_details.get('full_text')}\nGoal: {self.current_goal['description']}\nSuggest next step (e.g., 'Run budget optimization for ROAS')."
         plan=self._call_gemini(prompt); self._add_log(f"Exec plan: {plan}"); st.session_state.execution_plan_suggestion=plan
 
-    def execute_optimization_or_simulation(self, budget_param=None): # REFINED METHOD
+    def execute_optimization_or_simulation(self, budget_param=None):
         self._add_log("Executing optimization...")
         st.session_state.agent_state = "optimizing"
         df = self.current_df.copy()
-
-        if df.empty:
-            self._add_log("No data to optimize.")
-            st.session_state.optimization_results_df = pd.DataFrame()
-            st.session_state.agent_state = "reporting"
-            return pd.DataFrame()
-
+        if df.empty: self._add_log("No data to optimize."); st.session_state.optimization_results_df = pd.DataFrame(); st.session_state.agent_state = "reporting"; return pd.DataFrame()
         try:
             if budget_param is not None: current_budget_total = float(budget_param)
             elif self.current_goal and self.current_goal.get('budget') is not None: current_budget_total = float(self.current_goal.get('budget'))
@@ -419,37 +413,30 @@ class CampaignStrategyAgent:
             else: current_budget_total = 0.0
             if pd.isna(current_budget_total): current_budget_total = 0.0
             self._add_log(f"Opt budget: {current_budget_total:,.2f}")
-        except (ValueError, TypeError) as e:
-            self._add_log(f"Err: Invalid budget ({budget_param}). Using 0. Err: {e}"); current_budget_total = 0.0
-
+        except (ValueError, TypeError) as e: self._add_log(f"Err: Invalid budget ({budget_param}). Using 0. Err: {e}"); current_budget_total = 0.0
         cols_to_ensure_numeric = ['ROAS_proxy', 'Ad Spend', 'Historical Reach', 'Engagement Rate', 'Conversion Rate', 'Est Revenue Per Conversion']
         for col_name in cols_to_ensure_numeric:
-            if col_name not in df.columns:
-                self._add_log(f"Warn: Col '{col_name}' missing. Defaulting."); df[col_name] = 0.0
-                if col_name == 'Est Revenue Per Conversion': df[col_name] = 50.0
+            if col_name not in df.columns: self._add_log(f"Warn: Col '{col_name}' missing. Defaulting."); df[col_name] = 0.0;
+            if col_name == 'Est Revenue Per Conversion' and df[col_name].eq(0).all(): df[col_name] = 50.0 # Ensure default if all zero
             elif not pd.api.types.is_numeric_dtype(df[col_name]):
                 try: df[col_name] = pd.to_numeric(df[col_name], errors='coerce'); self._add_log(f"Warn: Col '{col_name}' converted to numeric.")
                 except Exception as e_conv: self._add_log(f"Err converting '{col_name}': {e_conv}. Defaulting."); df[col_name] = 0.0
             df[col_name] = df[col_name].fillna(0.0)
-
         roas_col_for_opt = 'ROAS_proxy'
         if roas_col_for_opt not in df.columns or df[roas_col_for_opt].isna().all() or df[roas_col_for_opt].eq(0).all():
             self._add_log(f"'{roas_col_for_opt}' N/A. Equal alloc."); df['Optimized Spend'] = safe_divide(current_budget_total, len(df)) if len(df) > 0 else 0.0
         else:
-            min_roas_val = df[roas_col_for_opt].min(skipna=True)
-            roas_adj = df[roas_col_for_opt].fillna(0) + abs(min_roas_val if pd.notnull(min_roas_val) else 0) + 1e-3
+            min_roas_val = df[roas_col_for_opt].min(skipna=True); roas_adj = df[roas_col_for_opt].fillna(0) + abs(min_roas_val if pd.notnull(min_roas_val) else 0) + 1e-3
             if roas_adj.sum() > 0: df['Budget Weight'] = roas_adj / roas_adj.sum(); df['Optimized Spend'] = df['Budget Weight'] * current_budget_total
             else: self._add_log("Adj ROAS sum 0. Equal alloc."); df['Optimized Spend'] = safe_divide(current_budget_total, len(df)) if len(df) > 0 else 0.0
         df['Optimized Spend'] = df['Optimized Spend'].fillna(0.0)
         df['Spend Ratio']=df.apply(lambda r:safe_divide(r.get('Optimized Spend',0.0),r.get('Ad Spend',0.0)) if r.get('Ad Spend',0.0)>0 else 1.0,axis=1)
         df['Optimized Reach']=(df.get('Historical Reach',0.0)*df['Spend Ratio']).round(0)
-        opt_reach_s = df.get('Optimized Reach', pd.Series(0.0, index=df.index))
-        eng_rate_s = df.get('Engagement Rate', pd.Series(0.0, index=df.index))
-        conv_rate_s = df.get('Conversion Rate', pd.Series(0.0, index=df.index))
-        opt_spend_s = df.get('Optimized Spend', pd.Series(0.0, index=df.index))
+        opt_reach_s = df.get('Optimized Reach', pd.Series(0.0, index=df.index)); eng_rate_s = df.get('Engagement Rate', pd.Series(0.0, index=df.index))
+        conv_rate_s = df.get('Conversion Rate', pd.Series(0.0, index=df.index)); opt_spend_s = df.get('Optimized Spend', pd.Series(0.0, index=df.index))
         est_rev_pc = df.get('Est Revenue Per Conversion', 50.0)
         if isinstance(est_rev_pc, pd.Series): est_rev_pc = est_rev_pc.mean() if not est_rev_pc.empty else 50.0
-        if pd.isna(est_rev_pc): est_rev_pc = 50.0
+        if pd.isna(est_rev_pc) or est_rev_pc == 0 : est_rev_pc = 50.0 # Ensure it's not zero for meaningful revenue
         df['Optimized Est Conversions']=(opt_reach_s * safe_divide(eng_rate_s,100.0) * safe_divide(conv_rate_s,100.0)).round(0)
         df['Optimized Est Revenue']=df['Optimized Est Conversions']*est_rev_pc
         df['Optimized ROAS_proxy']=safe_divide(df['Optimized Est Revenue'],opt_spend_s); df['Optimized ROAS_proxy']=df['Optimized ROAS_proxy'].fillna(0.0)
@@ -458,18 +445,36 @@ class CampaignStrategyAgent:
         self._add_log("Opt complete."); st.session_state.optimization_results_df=self.optimization_results
         st.session_state.agent_state="reporting"; return self.optimization_results
 
-    def generate_final_report_and_recommendations(self):
-        self._add_log("Gen final report..."); st.session_state.agent_state="reporting"; summ="No opt results."
+    def generate_final_report_and_recommendations(self): # CORRECTED f-string formatting
+        self._add_log("Gen final report..."); st.session_state.agent_state="reporting"; summary_text = "No optimization results." # Renamed variable
         if self.optimization_results is not None and not self.optimization_results.empty:
-            opt_r_m=self.optimization_results['Optimized ROAS_proxy'].mean() if 'Optimized ROAS_proxy' in self.optimization_results and pd.notnull(self.optimization_results['Optimized ROAS_proxy']).any() else 'N/A'
-            init_r_m=self.initial_df['ROAS_proxy'].mean() if 'ROAS_proxy' in self.initial_df and pd.notnull(self.initial_df['ROAS_proxy']).any() else 'N/A'
-            t5_s=self.optimization_results.nlargest(5,'Optimized Spend')[['Campaign','Optimized Spend']].to_string(index=False) if all(c in self.optimization_results for c in ['Optimized Spend','Campaign']) and not self.optimization_results.empty else 'N/A'
-            summ=(f"Orig Spend: ${self.initial_df.get('Ad Spend', pd.Series(dtype='float64')).sum():,.2f}, Opt Spend: ${self.optimization_results.get('Optimized Spend', pd.Series(dtype='float64')).sum():,.2f}\n"
-                  f"Orig Reach: {self.initial_df.get('Historical Reach', pd.Series(dtype='float64')).sum():,.0f}, Opt Reach: {self.optimization_results.get('Optimized Reach', pd.Series(dtype='float64')).sum():,.0f}\n"
-                  f"Orig Avg ROAS: {init_r_m:.2f if isinstance(init_r_m,float) else init_r_m}, Opt Avg ROAS: {opt_r_m:.2f if isinstance(opt_r_m,float) else opt_r_m}\nTop 5 Opt:\n{t5_s}")
-        p=f"Goal: {self.current_goal['description']}\nAnalysis: {st.session_state.get('analysis_insights','N/A')}\nStrategy: {self.chosen_strategy_details.get('name','N/A') if self.chosen_strategy_details else 'N/A'}\nOpt:\n{summ}\nProvide: Summary, Outcomes, Recomms (3-5), Next Steps."
-        self.recommendations=self._call_gemini(p); self._add_log(f"Final report: '{str(self.recommendations)[:70]}...'")
-        st.session_state.final_recommendations=self.recommendations; st.session_state.agent_state="done"; return self.recommendations
+            opt_roas_mean = self.optimization_results['Optimized ROAS_proxy'].mean() if 'Optimized ROAS_proxy' in self.optimization_results.columns and pd.notnull(self.optimization_results['Optimized ROAS_proxy']).any() else 'N/A'
+            init_roas_mean = self.initial_df['ROAS_proxy'].mean() if 'ROAS_proxy' in self.initial_df.columns and pd.notnull(self.initial_df['ROAS_proxy']).any() else 'N/A'
+            
+            init_roas_str = f"{init_roas_mean:.2f}" if isinstance(init_roas_mean, (float, np.floating)) else str(init_roas_mean)
+            opt_roas_str = f"{opt_roas_mean:.2f}" if isinstance(opt_roas_mean, (float, np.floating)) else str(opt_roas_mean)
+
+            t5_s_text = self.optimization_results.nlargest(5,'Optimized Spend')[['Campaign','Optimized Spend']].to_string(index=False) if all(c in self.optimization_results.columns for c in ['Optimized Spend','Campaign']) and not self.optimization_results.empty else 'N/A'
+            
+            orig_spend_s = self.initial_df.get('Ad Spend', pd.Series(dtype='float64')).sum()
+            opt_spend_s = self.optimization_results.get('Optimized Spend', pd.Series(dtype='float64')).sum()
+            orig_reach_s = self.initial_df.get('Historical Reach', pd.Series(dtype='float64')).sum()
+            opt_reach_s = self.optimization_results.get('Optimized Reach', pd.Series(dtype='float64')).sum()
+
+            summary_text=(
+                f"Orig Spend: ${orig_spend_s:,.2f}, Opt Spend: ${opt_spend_s:,.2f}\n"
+                f"Orig Reach: {orig_reach_s:,.0f}, Opt Reach: {opt_reach_s:,.0f}\n"
+                f"Orig Avg ROAS: {init_roas_str}, Opt Avg ROAS: {opt_roas_str}\n"
+                f"Top 5 Opt:\n{t5_s_text}"
+            )
+        
+        prompt_for_report = f"Goal: {self.current_goal['description']}\nAnalysis: {st.session_state.get('analysis_insights','N/A')}\nStrategy: {self.chosen_strategy_details.get('name','N/A') if self.chosen_strategy_details else 'N/A'}\nOptimization Results Summary:\n{summary_text}\n\nProvide a concise final report: 1. Summary of AI actions. 2. Key Outcomes (original vs. optimized). 3. Actionable Recommendations (3-5 bullets). 4. Potential Next Steps."
+        self.recommendations=self._call_gemini(prompt_for_report)
+        self._add_log(f"Final report from LLM: '{str(self.recommendations)[:70]}...'")
+        st.session_state.final_recommendations=self.recommendations
+        st.session_state.agent_state="done"
+        return self.recommendations
+
 
 # --- Main Streamlit App ---
 def main():
@@ -501,8 +506,7 @@ def main():
                     st.session_state.column_mapping=None; st.session_state.data_loaded_and_processed=False
                     st.session_state.last_fid=fid; st.rerun()
             if st.session_state.raw_uploaded_df is not None:
-                # Display mapping UI only if data is uploaded and not yet processed
-                if not st.session_state.data_loaded_and_processed or st.session_state.column_mapping is None:
+                if not st.session_state.data_loaded_and_processed or st.session_state.column_mapping is None : # Show mapping if not processed or mapping absent
                     st.session_state.column_mapping=map_columns_ui(st.session_state.raw_uploaded_df)
 
                 if st.button("Process Uploaded Data",key="p_data_btn"):
@@ -518,37 +522,30 @@ def main():
                     st.session_state.data_loaded_and_processed=True;st.session_state.raw_uploaded_df=None;st.session_state.column_mapping=None;st.rerun()
         st.divider()
 
-        # AI Agent Controls
         if st.session_state.data_loaded_and_processed and st.session_state.processed_df is not None and not st.session_state.processed_df.empty:
             st.header("🤖 AI Agent")
-            # Initialize or re-initialize agent if data source changed or agent not present
             if 'campaign_agent' not in st.session_state or st.session_state.get('agent_data_src')!=st.session_state.app_data_source:
-                print(f"DEBUG: Re-initializing CampaignAgent for data source: {st.session_state.app_data_source}")
-                st.session_state.campaign_agent=CampaignStrategyAgent(gemini_model_instance,st.session_state.processed_df.copy()) # Pass processed_df
-                st.session_state.agent_log=st.session_state.campaign_agent.log # Reset log from new agent
-                st.session_state.agent_data_src=st.session_state.app_data_source
-
+                st.session_state.campaign_agent=CampaignStrategyAgent(gemini_model_instance,st.session_state.processed_df.copy())
+                st.session_state.agent_log=st.session_state.campaign_agent.log; st.session_state.agent_data_src=st.session_state.app_data_source
             agent_ref=st.session_state.campaign_agent
             st.subheader("Define Goal")
             user_g=st.session_state.get("user_g_text","Maximize overall ROAS.")
-            g_in=st.text_area("Goal:",value=user_g,height=100,key="user_g_in")
-            st.session_state.user_g_text=g_in # Store user's input back to session state for persistence
+            g_in=st.text_area("Goal:",value=user_g,height=100,key="user_g_in_sidebar") # Unique key
+            st.session_state.user_g_text=g_in
             
-            def_b=st.session_state.processed_df['spend'].sum() if 'spend' in st.session_state.processed_df.columns and not st.session_state.processed_df.empty else 50000.0
-            user_b=st.session_state.get("user_b_val", def_b)
-            b_in=st.number_input("Budget (0 for current total):",min_value=0.0,value=user_b,step=1000.0,key="user_b_in")
-            st.session_state.user_b_val = b_in # Store user's input back
+            def_b=st.session_state.processed_df['spend'].sum() if 'spend' in st.session_state.processed_df.columns and not st.session_state.processed_df.empty else 50000.0 # Use standardized name
+            user_b=st.session_state.get("user_b_val",def_b)
+            b_in=st.number_input("Budget (0 for current total):",min_value=0.0,value=user_b,step=1000.0,key="user_b_in_sidebar") # Unique key
+            st.session_state.user_b_val=b_in
 
-            # Agent busy / Gemini offline checks
             agent_is_busy_flag=(hasattr(agent_ref,'current_goal') and agent_ref.current_goal is not None and st.session_state.get('agent_state') not in ["idle","done"])
             gemini_is_offline_flag = agent_ref.gemini_model is None or not GOOGLE_GEMINI_SDK_AVAILABLE
-            start_button_is_disabled = agent_is_busy_flag or gemini_is_offline_flag
+            start_btn_disabled = agent_is_busy_flag or gemini_is_offline_flag
+            known_llm_error_prefixes_sidebar = ["gemini model not available","error calling gemini:","could not extract text","gemini client structure incorrect","gemini retry error:"]
 
-            known_llm_error_outputs_sidebar = ["gemini model not available","error calling gemini:","could not extract text","gemini client structure","gemini retry error:"]
 
-            if st.button("🚀 Start Agent Analysis",type="primary",disabled=start_button_is_disabled,key="start_agent_btn_sidebar"):
-                agent_ref.current_df = st.session_state.processed_df.copy() # Ensure agent uses the latest processed data
-                agent_ref.initial_df = st.session_state.processed_df.copy()
+            if st.button("🚀 Start Agent Analysis",type="primary",disabled=start_btn_disabled,key="start_agent_btn_sidebar"):
+                agent_ref.current_df=st.session_state.processed_df.copy(); agent_ref.initial_df=st.session_state.processed_df.copy()
                 agent_ref.set_goal(g_in,budget=b_in if b_in > 0 else None)
                 with st.spinner("Agent analyzing..."): agent_ref.analyze_data_and_identify_insights()
                 
@@ -556,12 +553,12 @@ def main():
                 analysis_call_ok = True
                 if not insights_value or not str(insights_value).strip(): analysis_call_ok = False
                 else:
-                    for err_prefix_check in known_llm_error_outputs_sidebar:
+                    for err_prefix_check in known_llm_error_prefixes_sidebar: # Use specific list for sidebar
                         if str(insights_value).lower().startswith(err_prefix_check.lower()): analysis_call_ok = False; break
                 
                 if analysis_call_ok:
                     with st.spinner("Agent strategizing..."): agent_ref.develop_strategy_options()
-                else: st.error(f"Strategy dev skipped. Analysis result: '{str(insights_value)[:70]}...'")
+                else: st.error(f"Strategy dev skipped. Analysis: '{str(insights_value)[:70]}...'")
                 st.rerun()
             if gemini_is_offline_flag: st.warning("Gemini features disabled.")
 
@@ -569,25 +566,23 @@ def main():
             if 'agent_log' in st.session_state and isinstance(st.session_state.agent_log,list):
                 try:
                     log_text_val="\n".join(reversed([str(s_entry)[:500].encode('utf-8','ignore').decode('utf-8') for s_entry in st.session_state.agent_log]))
-                    st.text_area("Activity Log",value=log_text_val,height=150,disabled=True,key="agent_log_display_sidebar")
+                    st.text_area("Activity Log",value=log_text_val,height=150,disabled=True,key="agent_log_display_sidebar_corrected") # Unique key
                 except Exception as e_log_disp: st.error(f"Log display error: {e_log_disp}")
 
-            if st.button("Reset Agent State",key="reset_agent_sidebar_btn"):
+            if st.button("Reset Agent State",key="reset_agent_sidebar_btn_corrected"): # Unique key
                 keys_to_clear_agent_state=['analysis_summary','analysis_insights','strategy_options','execution_plan_suggestion','optimization_results_df','final_recommendations','user_g_text','user_b_val', 'agent_state']
                 for k_agent_reset in keys_to_clear_agent_state:
                     if k_agent_reset in st.session_state: del st.session_state[k_agent_reset]
-                # Re-initialize the agent with the current processed_df
                 if 'processed_df' in st.session_state and st.session_state.processed_df is not None:
                     st.session_state.campaign_agent=CampaignStrategyAgent(gemini_model_instance,st.session_state.processed_df.copy())
-                    st.session_state.agent_log=st.session_state.campaign_agent.log # Get fresh log
+                    st.session_state.agent_log=st.session_state.campaign_agent.log
                 st.session_state.agent_state="idle"; st.rerun()
         else: st.info("Process data to enable AI Agent controls.")
 
-    # --- Main Area Tabs ---
     active_df_for_main = st.session_state.processed_df if 'processed_df' in st.session_state and st.session_state.processed_df is not None else pd.DataFrame()
     main_area_display_tabs = st.tabs(["📊 Performance Dashboard", "🤖 AI Optimization Agent"])
 
-    with main_area_display_tabs[0]: # DASHBOARD TAB
+    with main_area_display_tabs[0]:
         st.header("Campaign Performance Dashboard")
         if st.session_state.data_loaded_and_processed and not active_df_for_main.empty:
             display_overview_metrics(active_df_for_main);st.divider();display_campaign_table(active_df_for_main);st.divider();display_visualizations(active_df_for_main)
@@ -597,9 +592,9 @@ def main():
             st.info("Please map columns and click 'Process Uploaded Data' in the sidebar."); st.subheader("Raw Uploaded Data Preview"); st.dataframe(st.session_state.raw_uploaded_df.head())
         else: st.info("Load data using the sidebar to view the dashboard.")
 
-    with main_area_display_tabs[1]: # AI AGENT TAB
+    with main_area_display_tabs[1]:
         st.header("AI Optimization Agent Workflow")
-        known_llm_error_prefixes_ui = ["gemini model not available","error calling gemini:","could not extract text","gemini client structure incorrect","gemini retry error:"] # Define for UI checks
+        known_llm_error_prefixes_ui_tab = ["gemini model not available","error calling gemini:","could not extract text","gemini client structure incorrect","gemini retry error:"]
 
         if not st.session_state.data_loaded_and_processed or active_df_for_main.empty: st.info("Load & process data in the sidebar to use the AI Agent.")
         elif 'campaign_agent' not in st.session_state: st.warning("AI Agent not initialized. Please ensure data is processed from sidebar.")
@@ -616,101 +611,95 @@ def main():
                 if 'analysis_summary' in st.session_state:
                     with analysis_ui_container.expander("View Raw Data Summary (used by agent)",expanded=False): st.text(st.session_state.analysis_summary)
                 analysis_insights_text = st.session_state.get('analysis_insights',"Agent is processing data...")
-                analysis_call_has_failed = False
-                if not analysis_insights_text or not str(analysis_insights_text).strip(): analysis_call_has_failed = True
+                analysis_call_has_failed_ui_tab = False
+                if not analysis_insights_text or not str(analysis_insights_text).strip(): analysis_call_has_failed_ui_tab = True
                 else:
-                    for err_prefix_check_ui in known_llm_error_prefixes_ui:
-                        if str(analysis_insights_text).lower().startswith(err_prefix_check_ui.lower()): analysis_call_has_failed = True; break
-                if analysis_call_has_failed: analysis_ui_container.error(f"AI Analysis Error: {analysis_insights_text}")
+                    for err_prefix_check_ui_tab in known_llm_error_prefixes_ui_tab:
+                        if str(analysis_insights_text).lower().startswith(err_prefix_check_ui_tab.lower()): analysis_call_has_failed_ui_tab = True; break
+                if analysis_call_has_failed_ui_tab: analysis_ui_container.error(f"AI Analysis Error: {analysis_insights_text}")
                 else: analysis_ui_container.markdown(analysis_insights_text)
 
-            elif current_agent_ui_state == "strategizing":
+            elif current_agent_ui_state == "strategizing": # CORRECTED UI CHECK HERE
                 st.subheader("💡 Agent: Strategy Development"); strategy_ui_container=st.container(border=True)
                 strategy_ui_container.markdown("<p class='agent-thought'>Agent is brainstorming strategies...</p>",unsafe_allow_html=True)
-                analysis_output_text = str(st.session_state.get('analysis_insights',''))
-                analysis_truly_failed_check = False
-                if not analysis_output_text or not analysis_output_text.strip(): analysis_truly_failed_check=True
+                analysis_output_text_strat_tab = str(st.session_state.get('analysis_insights',''))
+                analysis_truly_failed_check_strat_tab = False
+                if not analysis_output_text_strat_tab or not analysis_output_text_strat_tab.strip(): analysis_truly_failed_check_strat_tab=True
                 else:
-                    for err_prefix_ui_check in known_llm_error_prefixes_ui:
-                        if analysis_output_text.lower().startswith(err_prefix_ui_check.lower()): analysis_truly_failed_check=True; break
+                    for err_p_ui_strat_tab in known_llm_error_prefixes_ui_tab:
+                        if analysis_output_text_strat_tab.lower().startswith(err_p_ui_strat_tab.lower()): analysis_truly_failed_check_strat_tab=True; break
                 
-                if analysis_truly_failed_check: strategy_ui_container.error(f"Cannot develop strategies. Analysis phase issue: '{analysis_output_text[:100]}...'")
+                if analysis_truly_failed_check_strat_tab: strategy_ui_container.error(f"Cannot develop strategies. Analysis phase issue: '{analysis_output_text_strat_tab[:100]}...'")
                 elif 'strategy_options' in st.session_state and st.session_state.strategy_options:
                     strategy_ui_container.write("Agent's proposed strategies (select one):")
-                    for i_strat_item, strat_item_obj in enumerate(st.session_state.strategy_options):
-                        with strategy_ui_container.expander(f"**Strategy {i_strat_item+1}: {strat_item_obj.get('name','Unnamed')}**"):
-                            st.markdown(strat_item_obj.get('full_text','N/A'))
-                            if st.button(f"Select: {strat_item_obj.get('name',f'Strat {i_strat_item+1}')}",key=f"select_strategy_button_tab_{i_strat_item}"):
-                                with st.spinner("Agent planning execution..."): agent_ui_instance.select_strategy_and_plan_execution(i_strat_item); st.rerun()
-                elif 'strategy_options' in st.session_state and not st.session_state.strategy_options: # Analysis OK, but no strategies
+                    for i_strat_item_tab, strat_item_obj_tab in enumerate(st.session_state.strategy_options):
+                        with strategy_ui_container.expander(f"**Strategy {i_strat_item_tab+1}: {strat_item_obj_tab.get('name','Unnamed')}**"):
+                            st.markdown(strat_item_obj_tab.get('full_text','N/A'))
+                            if st.button(f"Select: {strat_item_obj_tab.get('name',f'Strat {i_strat_item_tab+1}')}",key=f"select_strategy_button_main_tab_{i_strat_item_tab}"):
+                                with st.spinner("Agent planning execution..."): agent_ui_instance.select_strategy_and_plan_execution(i_strat_item_tab); st.rerun()
+                elif 'strategy_options' in st.session_state and not st.session_state.strategy_options:
                      strategy_ui_container.warning("AI analysis seems OK, but no distinct strategies were parsed/proposed. Check Agent Log for raw LLM output.")
-                     with strategy_ui_container.expander("View Analysis Output (that led to no strategies)", expanded=False): st.markdown(analysis_output_text)
+                     with strategy_ui_container.expander("View Analysis Output (that led to no strategies)", expanded=False): st.markdown(analysis_output_text_strat_tab)
                 else: strategy_ui_container.info("Agent is formulating strategies / waiting for successful analysis from previous step.")
 
-            elif current_agent_ui_state == "optimizing":
+            elif current_agent_ui_state == "optimizing": # UI for optimizing state
                 st.subheader("⚙️ Agent: Optimization Plan"); opt_ui_container=st.container(border=True)
                 opt_ui_container.markdown("<p class='agent-thought'>Agent preparing for execution...</p>",unsafe_allow_html=True)
-                exec_plan_text = st.session_state.get('execution_plan_suggestion','');
-                plan_call_has_failed = False
-                if not exec_plan_text or not str(exec_plan_text).strip(): plan_call_has_failed = True
+                exec_plan_text_opt_tab = st.session_state.get('execution_plan_suggestion','');
+                plan_call_has_failed_opt_tab = False
+                if not exec_plan_text_opt_tab or not str(exec_plan_text_opt_tab).strip(): plan_call_has_failed_opt_tab = True
                 else:
-                    for err_prefix_check_ui in known_llm_error_prefixes_ui:
-                        if str(exec_plan_text).lower().startswith(err_prefix_check_ui.lower()): plan_call_has_failed = True; break
-                if plan_call_has_failed: opt_ui_container.error(f"AI Plan Generation Error: {exec_plan_text}")
-                else: opt_ui_container.info(f"Agent's plan: {exec_plan_text}")
-                
-                default_budget_for_opt = agent_ui_instance.current_df['Ad Spend'].sum() if 'Ad Spend' in agent_ui_instance.current_df.columns and not agent_ui_instance.current_df.empty else 0.0
-                current_goal_budget = agent_ui_instance.current_goal.get('budget', default_budget_for_opt) if agent_ui_instance.current_goal else default_budget_for_opt
-                opt_budget_input_val = st.number_input("Budget for Optimization:",min_value=0.0,value=current_goal_budget ,step=1000.0,key="opt_budget_input_agent_tab")
-                if st.button("▶️ Run Optimization Action",type="primary",key="run_opt_action_button_agent_tab"):
-                    with st.spinner("Agent optimizing..."): agent_ui_instance.execute_optimization_or_simulation(budget_param=opt_budget_input_val); st.rerun()
+                    for err_prefix_check_ui_opt_tab in known_llm_error_prefixes_ui_tab:
+                        if str(exec_plan_text_opt_tab).lower().startswith(err_prefix_check_ui_opt_tab.lower()): plan_call_has_failed_opt_tab = True; break
+                if plan_call_has_failed_opt_tab: opt_ui_container.error(f"AI Plan Generation Error: {exec_plan_text_opt_tab}")
+                else: opt_ui_container.info(f"Agent's plan: {exec_plan_text_opt_tab}")
+                default_budget_for_opt_val = agent_ui_instance.current_df['Ad Spend'].sum() if 'Ad Spend' in agent_ui_instance.current_df.columns and not agent_ui_instance.current_df.empty else 0.0
+                current_goal_budget_val = agent_ui_instance.current_goal.get('budget', default_budget_for_opt_val) if agent_ui_instance.current_goal else default_budget_for_opt_val
+                opt_budget_input_val_ui = st.number_input("Budget for Optimization:",min_value=0.0,value=current_goal_budget_val ,step=1000.0,key="opt_budget_input_agent_tab_main")
+                if st.button("▶️ Run Optimization Action",type="primary",key="run_opt_action_button_agent_tab_main"):
+                    with st.spinner("Agent optimizing..."): agent_ui_instance.execute_optimization_or_simulation(budget_param=opt_budget_input_val_ui); st.rerun()
 
-            elif current_agent_ui_state == "reporting":
+            elif current_agent_ui_state == "reporting": # UI for reporting state
                 st.subheader("📝 Agent: Final Report"); report_ui_container=st.container(border=True)
                 report_ui_container.markdown("<p class='agent-thought'>Agent compiling report...</p>",unsafe_allow_html=True)
                 if 'optimization_results_df' in st.session_state and not st.session_state.optimization_results_df.empty:
-                    report_ui_container.write("#### Optimized Allocation (Agent Output):"); opt_df_for_report=st.session_state.optimization_results_df
-                    # Agent output DataFrame (optimization_results_df) should have 'Campaign', 'Ad Spend', 'Optimized Spend'
-                    if all(c_col_rep in opt_df_for_report.columns for c_col_rep in ['Campaign','Ad Spend','Optimized Spend']):
-                        fig_report_chart=go.Figure();fig_report_chart.add_trace(go.Bar(name='Original',x=opt_df_for_report['Campaign'],y=opt_df_for_report['Ad Spend']));fig_report_chart.add_trace(go.Bar(name='Optimized',x=opt_df_for_report['Campaign'],y=opt_df_for_report['Optimized Spend']))
-                        fig_report_chart.update_layout(barmode='group',title_text='Original vs. Optimized Spend (Agent Results)'); report_ui_container.plotly_chart(fig_report_chart,use_container_width=True)
+                    report_ui_container.write("#### Optimized Allocation (Agent Output):"); opt_df_for_report_val=st.session_state.optimization_results_df
+                    if all(c_col_rep_val in opt_df_for_report_val.columns for c_col_rep_val in ['Campaign','Ad Spend','Optimized Spend']):
+                        fig_report_chart_val=go.Figure();fig_report_chart_val.add_trace(go.Bar(name='Original',x=opt_df_for_report_val['Campaign'],y=opt_df_for_report_val['Ad Spend']));fig_report_chart_val.add_trace(go.Bar(name='Optimized',x=opt_df_for_report_val['Campaign'],y=opt_df_for_report_val['Optimized Spend']))
+                        fig_report_chart_val.update_layout(barmode='group',title_text='Original vs. Optimized Spend (Agent Results)'); report_ui_container.plotly_chart(fig_report_chart_val,use_container_width=True)
                     else: st.warning("Chart cannot be displayed: Missing 'Campaign', 'Ad Spend' or 'Optimized Spend' in agent's optimization results.")
-                    report_ui_container.dataframe(opt_df_for_report)
+                    report_ui_container.dataframe(opt_df_for_report_val)
                 else: report_ui_container.info("No optimization results from agent to display.")
-                
-                final_recs_text_val = st.session_state.get('final_recommendations','');
-                report_call_has_failed = False
-                if not final_recs_text_val or not str(final_recs_text_val).strip(): report_call_has_failed = True # No report is also considered a state where generation might be needed
+                final_recs_text_val_rep = st.session_state.get('final_recommendations','');
+                report_call_has_failed_rep = False
+                if not final_recs_text_val_rep or not str(final_recs_text_val_rep).strip(): report_call_has_failed_rep = True
                 else:
-                    for err_prefix_check_ui in known_llm_error_prefixes_ui:
-                        if str(final_recs_text_val).lower().startswith(err_prefix_check_ui.lower()): report_call_has_failed = True; break
-                
-                if report_call_has_failed and str(final_recs_text_val).strip(): report_ui_container.error(f"AI Report Generation Error: {final_recs_text_val}")
-                elif final_recs_text_val: report_ui_container.markdown(final_recs_text_val)
-                
-                if not final_recs_text_val or report_call_has_failed :
-                    if st.button("Generate Final AI Report",type="primary",key="generate_final_report_button_agent_tab"):
+                    for err_prefix_check_ui_rep in known_llm_error_prefixes_ui_tab:
+                        if str(final_recs_text_val_rep).lower().startswith(err_prefix_check_ui_rep.lower()): report_call_has_failed_rep = True; break
+                if report_call_has_failed_rep and str(final_recs_text_val_rep).strip(): report_ui_container.error(f"AI Report Generation Error: {final_recs_text_val_rep}")
+                elif final_recs_text_val_rep: report_ui_container.markdown(final_recs_text_val_rep)
+                if not final_recs_text_val_rep or report_call_has_failed_rep :
+                    if st.button("Generate Final AI Report",type="primary",key="generate_final_report_button_agent_tab_main"):
                         with st.spinner("Agent generating final report..."): agent_ui_instance.generate_final_report_and_recommendations(); st.rerun()
 
-            elif current_agent_ui_state == "done":
+            elif current_agent_ui_state == "done": # UI for done state
                 st.subheader("✅ Agent Task Completed"); done_ui_container=st.container(border=True)
-                final_recs_completed_text = st.session_state.get('final_recommendations',"Report generation pending or was not successful.");
-                done_report_has_failed = False
-                if not final_recs_completed_text or not str(final_recs_completed_text).strip(): done_report_has_failed = True
+                final_recs_completed_text_val = st.session_state.get('final_recommendations',"Report generation pending or was not successful.");
+                done_report_has_failed_val = False
+                if not final_recs_completed_text_val or not str(final_recs_completed_text_val).strip(): done_report_has_failed_val = True
                 else:
-                    for err_prefix_check_ui in known_llm_error_prefixes_ui:
-                        if str(final_recs_completed_text).lower().startswith(err_prefix_check_ui.lower()): done_report_has_failed = True; break
-                if done_report_has_failed and str(final_recs_completed_text).strip(): done_ui_container.error(f"AI Report Error: {final_recs_completed_text}")
-                else: done_ui_container.markdown(final_recs_completed_text)
-
-                if st.button("Start New Agent Analysis (Same Data)",key="start_new_analysis_done_button_agent_tab"):
+                    for err_prefix_check_ui_done in known_llm_error_prefixes_ui_tab:
+                        if str(final_recs_completed_text_val).lower().startswith(err_prefix_check_ui_done.lower()): done_report_has_failed_val = True; break
+                if done_report_has_failed_val and str(final_recs_completed_text_val).strip(): done_ui_container.error(f"AI Report Error: {final_recs_completed_text_val}")
+                else: done_ui_container.markdown(final_recs_completed_text_val)
+                if st.button("Start New Agent Analysis (Same Data)",key="start_new_analysis_done_button_agent_tab_main"):
                     if 'processed_df' in st.session_state and st.session_state.processed_df is not None:
                         st.session_state.campaign_agent=CampaignStrategyAgent(gemini_model_instance,st.session_state.processed_df.copy())
                         st.session_state.agent_log=st.session_state.campaign_agent.log
                     st.session_state.agent_state="idle"
-                    agent_state_keys_to_reset=['analysis_summary','analysis_insights','strategy_options','execution_plan_suggestion','optimization_results_df','final_recommendations','user_g_text','user_b_val']
-                    for k_to_reset in agent_state_keys_to_reset:
-                        if k_to_reset in st.session_state: del st.session_state[k_to_reset]
+                    agent_state_keys_to_reset_list=['analysis_summary','analysis_insights','strategy_options','execution_plan_suggestion','optimization_results_df','final_recommendations','user_g_text','user_b_val']
+                    for k_to_reset_val in agent_state_keys_to_reset_list:
+                        if k_to_reset_val in st.session_state: del st.session_state[k_to_reset_val]
                     st.rerun()
 
 if __name__ == "__main__":
