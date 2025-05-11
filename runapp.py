@@ -300,7 +300,7 @@ class CampaignStrategyAgent:
     def __init__(self, gemini_model, initial_df_with_agent_compat_names):
         self.gemini_model = gemini_model
         self.initial_df = initial_df_with_agent_compat_names.copy() if initial_df_with_agent_compat_names is not None else pd.DataFrame()
-        self.current_df = self.initial_df.copy()
+        self.current_df = self.initial_df.copy() # Agent works with this df which should have agent-compatible names
         self.log = ["Agent initialized."]
         self.current_goal = None; self.strategy_options = []; self.chosen_strategy_details = None
         self.optimization_results = None; self.recommendations = ""
@@ -312,7 +312,7 @@ class CampaignStrategyAgent:
         if 'agent_log' not in st.session_state or not isinstance(st.session_state.agent_log, list):
             st.session_state.agent_log = []
         new_log_entry = f"[{timestamp}] {msg}"
-        st.session_state.agent_log = [new_log_entry] + st.session_state.agent_log[:49]
+        st.session_state.agent_log = [new_log_entry] + st.session_state.agent_log[:49] # Keep last 50 entries
         self.log = st.session_state.agent_log
 
     @st.cache_data(show_spinner=False, persist="disk")
@@ -341,16 +341,22 @@ class CampaignStrategyAgent:
         self.current_goal = {"description":goal_description,"budget":budget,"target_metric_improvement":target_metric_improvement}
         self._add_log(f"Goal: {goal_description}"); st.session_state.agent_state = "analyzing"
 
-    def analyze_data_and_identify_insights(self):
-        if self.current_df.empty: self._add_log("Err: No data for analysis."); st.session_state.analysis_insights="No data."; st.session_state.agent_state="idle"; return {"summary":"No data.","insights":"No data."}
+    def analyze_data_and_identify_insights(self): # CORRECTED HERE
+        if self.current_df.empty:
+            self._add_log("Err: No data for analysis.")
+            st.session_state.analysis_insights="No data."
+            st.session_state.analysis_summary="No data summary available." # Ensure this is set
+            st.session_state.agent_state="idle"
+            return {"summary":"No data summary available.", "insights":"No data."} # Use the string
+
         self._add_log("Starting analysis..."); st.session_state.agent_state = "analyzing"
-        data_summary = get_data_summary(self.current_df)
+        data_summary = get_data_summary(self.current_df) # 'data_summary' is defined
         self._add_log("Data summary generated."); st.session_state.analysis_summary = data_summary
         prompt = f"Analyze campaign data for goal: {self.current_goal['description']}.\nBudget: {self.current_goal.get('budget','N/A')}.\nData Summary:\n{data_summary}\nProvide: Key Observations, Opportunities, Risks. Concise."
         self._add_log("Querying LLM for insights...")
         insights = self._call_gemini(prompt); self._add_log(f"LLM insights: '{str(insights)[:70]}...'")
         st.session_state.analysis_insights = insights; st.session_state.agent_state = "strategizing"
-        return {"summary":summary, "insights":insights}
+        return {"summary":data_summary, "insights":insights} # Use data_summary
 
     def develop_strategy_options(self):
         current_analysis_insights = st.session_state.get('analysis_insights', '')
@@ -371,16 +377,20 @@ class CampaignStrategyAgent:
         is_strat_gen_valid = True
         if not raw_strategies or not str(raw_strategies).strip(): is_strat_gen_valid = False
         else:
-            for err_out in known_error_outputs:
+            for err_out in known_error_outputs: # Check if strategy generation itself returned an error
                 if str(raw_strategies).lower().startswith(err_out.lower()): is_strat_gen_valid = False; break
         
         if raw_strategies and is_strat_gen_valid:
             split_keyword = "--- STRATEGY SEPARATOR ---"
-            if split_keyword in raw_strategies: strategy_blocks = raw_strategies.split(split_keyword)
-            else:
-                strategy_blocks = re.split(r'\bStrategy Name:\s*', raw_strategies, flags=re.IGNORECASE)[1:]
-                if strategy_blocks: strategy_blocks = ["Strategy Name: " + block for block in strategy_blocks]
-            if not strategy_blocks and raw_strategies: strategy_blocks = [raw_strategies] # Treat as one if no splits
+            strategy_blocks = raw_strategies.split(split_keyword) if split_keyword in raw_strategies else []
+            if not strategy_blocks and raw_strategies: # Fallback if separator not found
+                 # Try to split by "Strategy Name:" but be careful not to create empty first element if string starts with it
+                temp_blocks = re.split(r'\bStrategy Name:\s*', raw_strategies, flags=re.IGNORECASE)
+                if temp_blocks:
+                    strategy_blocks = [("Strategy Name: " + block if i > 0 or not raw_strategies.lower().startswith("strategy name:") else block) for i, block in enumerate(temp_blocks) if block.strip()]
+            if not strategy_blocks and raw_strategies.strip(): # If still no blocks, treat the whole thing as one
+                strategy_blocks = [raw_strategies]
+
 
             for i, block_text in enumerate(strategy_blocks):
                 block_text = block_text.strip()
@@ -390,19 +400,19 @@ class CampaignStrategyAgent:
                 strat_name = name_match.group(1).strip() if name_match and name_match.group(1).strip() else f"AI Strategy {i+1}"
                 strat_desc = desc_match.group(1).strip() if desc_match else "Details in full text."
                 self.strategy_options.append({"name": strat_name, "description": strat_desc, "full_text": block_text})
-            if not self.strategy_options and raw_strategies: # Fallback if parsing yields nothing but raw_strategies had text
+            if not self.strategy_options and raw_strategies:
                  self.strategy_options.append({"name": "LLM Output (Review Format)", "description": "Could not parse distinct strategies. View full text.", "full_text": raw_strategies})
-        else: self._add_log(f"Strategy parsing/LLM call failed: '{str(raw_strategies)[:100]}...'")
+        else: self._add_log(f"Strategy parsing/LLM call failed or returned empty: '{str(raw_strategies)[:100]}...'")
         st.session_state.strategy_options = self.strategy_options; return self.strategy_options
 
-    def select_strategy_and_plan_execution(self,idx): # Same as before
+    def select_strategy_and_plan_execution(self,idx):
         if not self.strategy_options or idx>=len(self.strategy_options): self._add_log("Invalid strat sel."); return
         self.chosen_strategy_details=self.strategy_options[idx]
         self._add_log(f"Strat: {self.chosen_strategy_details.get('name','N/A')}"); st.session_state.agent_state="optimizing"
         prompt=f"Strategy: {self.chosen_strategy_details.get('name')}\nDetails: {self.chosen_strategy_details.get('full_text')}\nGoal: {self.current_goal['description']}\nSuggest next step (e.g., 'Run budget optimization for ROAS')."
         plan=self._call_gemini(prompt); self._add_log(f"Exec plan: {plan}"); st.session_state.execution_plan_suggestion=plan
 
-    def execute_optimization_or_simulation(self,budget_p=None): # Same as before, ensure agent-compat names are used from self.current_df
+    def execute_optimization_or_simulation(self,budget_p=None):
         self._add_log("Executing opt..."); st.session_state.agent_state="optimizing"
         df=self.current_df.copy()
         if df.empty: self._add_log("No data to opt."); st.session_state.optimization_results_df=pd.DataFrame(); st.session_state.agent_state="reporting"; return pd.DataFrame()
@@ -430,7 +440,7 @@ class CampaignStrategyAgent:
         self._add_log("Opt complete."); st.session_state.optimization_results_df=self.optimization_results
         st.session_state.agent_state="reporting"; return self.optimization_results
 
-    def generate_final_report_and_recommendations(self): # Same as before
+    def generate_final_report_and_recommendations(self):
         self._add_log("Gen final report..."); st.session_state.agent_state="reporting"; summ="No opt results."
         if self.optimization_results is not None and not self.optimization_results.empty:
             opt_r_m=self.optimization_results['Optimized ROAS_proxy'].mean() if 'Optimized ROAS_proxy' in self.optimization_results and pd.notnull(self.optimization_results['Optimized ROAS_proxy']).any() else 'N/A'
